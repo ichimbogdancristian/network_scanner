@@ -1,0 +1,57 @@
+# Network Scanner specific files
+*.log
+*.html
+NetworkScan_*
+scan_results/
+output/
+temp/
+
+# PowerShell specific
+*.ps1xml
+*.psd1
+*.psm1 (if temporary)
+
+# Windows specific
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# IDE/Editor files
+.vscode/
+.vs/
+*.code-workspace
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Archives
+*.zip
+*.rar
+*.7z
+*.tar.gz
+
+# Credentials and sensitive data
+*config.json
+*credentials*
+*password*
+*secret*
+*.key
+*.pem
+
+# Output directories
+logs/
+reports/
+results/
