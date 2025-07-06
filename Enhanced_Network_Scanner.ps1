@@ -2944,23 +2944,67 @@ function Export-ScanResults {
         .control-btn:hover { 
             background: #2980b9; 
         }
+        .table-container {
+            margin-top: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .table-header-box {
+            background: #34495e;
+            border-radius: 8px;
+            padding: 0;
+            margin: 0 0 15px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .table-body-box {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            max-height: 600px;
+            overflow-y: auto;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
         table { 
             width: 100%; 
             border-collapse: collapse; 
-            margin-top: 20px; 
+            margin: 0;
+        }
+        .header-table {
+            margin: 0;
+            background: #34495e;
+        }
+        .body-table {
+            margin: 0;
         }
         th, td { 
             padding: 12px; 
             text-align: left; 
-            border-bottom: 1px solid #ddd; 
+            border: none;
         }
+        .header-table th:nth-child(1), .body-table td:nth-child(1) { width: 15%; }
+        .header-table th:nth-child(2), .body-table td:nth-child(2) { width: 12%; }
+        .header-table th:nth-child(3), .body-table td:nth-child(3) { width: 20%; }
+        .header-table th:nth-child(4), .body-table td:nth-child(4) { width: 25%; }
+        .header-table th:nth-child(5), .body-table td:nth-child(5) { width: 20%; }
+        .header-table th:nth-child(6), .body-table td:nth-child(6) { width: 8%; }
         th { 
             background: #34495e; 
             color: white; 
             font-weight: bold;
+            border-bottom: 2px solid #2c3e50;
         }
-        tr:hover { 
-            background: #f5f5f5; 
+        td {
+            border-bottom: 1px solid #eee;
+        }
+        tbody tr:hover { 
+            background: #f8f9fa; 
+        }
+        tbody tr:nth-child(even) {
+            background: #fafafa;
+        }
+        tbody tr:nth-child(even):hover {
+            background: #f0f0f0;
         }
         .status-alive { 
             background: #d4edda; 
@@ -2997,8 +3041,15 @@ function Export-ScanResults {
         @media (max-width: 768px) {
             .stats { flex-direction: column; }
             .stat-card { margin: 5px 0; }
-            table { font-size: 12px; }
-            th, td { padding: 8px; }
+            .table-container { font-size: 12px; }
+            .table-body-box { max-height: 400px; }
+            th, td { padding: 8px 4px; }
+            .header-table th:nth-child(1), .body-table td:nth-child(1) { width: 20%; }
+            .header-table th:nth-child(2), .body-table td:nth-child(2) { width: 15%; }
+            .header-table th:nth-child(3), .body-table td:nth-child(3) { width: 20%; }
+            .header-table th:nth-child(4), .body-table td:nth-child(4) { width: 20%; }
+            .header-table th:nth-child(5), .body-table td:nth-child(5) { width: 15%; }
+            .header-table th:nth-child(6), .body-table td:nth-child(6) { width: 10%; }
         }
     </style>
 </head>
@@ -3039,18 +3090,27 @@ function Export-ScanResults {
             <button class="control-btn" onclick="window.print()">🖨️ Print Report</button>
         </div>
         
-        <table id="resultsTable">
-            <thead>
-                <tr>
-                    <th>IP Address</th>
-                    <th>Status</th>
-                    <th>Open Ports</th>
-                    <th>Services</th>
-                    <th>Vulnerabilities</th>
-                    <th>Response Time</th>
-                </tr>
-            </thead>
-            <tbody>
+        <div class="table-container">
+            <!-- Table Header Box -->
+            <div class="table-header-box">
+                <table class="header-table">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>Status</th>
+                            <th>Open Ports</th>
+                            <th>Services</th>
+                            <th>Vulnerabilities</th>
+                            <th>Response Time</th>
+                        </tr>
+                    </thead>
+                </table>
+            </div>
+            
+            <!-- Table Body Box -->
+            <div class="table-body-box">
+                <table class="body-table" id="resultsTable">
+                    <tbody>
 "@
 
         # Initialize StringBuilder for building the HTML content
@@ -3113,24 +3173,41 @@ function Export-ScanResults {
         
         # Close HTML structure and add JavaScript functionality
         $htmlClosing = @"
-                </tbody>
-            </table>
-        </div>
-        
-        <div class="footer">
-            <p>Report generated on: $currentDate</p>
-            <p>Powered by Enhanced Network Scanner v2.0</p>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
+        
+    <div class="footer">
+        <p>Report generated on: $currentDate</p>
+        <p>Powered by Enhanced Network Scanner v2.0</p>
+    </div>
+</div>
 
     <script>
         function exportToCSV() {
-            const table = document.getElementById('resultsTable');
-            const rows = table.querySelectorAll('tr');
+            // Get header from header table
+            const headerTable = document.querySelector('.header-table');
+            const headerRow = headerTable.querySelector('thead tr');
+            const headerCells = headerRow.querySelectorAll('th');
+            
+            // Get body rows from body table
+            const bodyTable = document.getElementById('resultsTable');
+            const bodyRows = bodyTable.querySelectorAll('tbody tr');
+            
             let csvContent = '';
             
-            rows.forEach(row => {
-                const cells = row.querySelectorAll('th, td');
+            // Add header row
+            const headerData = Array.from(headerCells).map(cell => {
+                let text = cell.textContent || '';
+                return '"' + text.replace(/"/g, '""') + '"';
+            }).join(',');
+            csvContent += headerData + '\n';
+            
+            // Add body rows
+            bodyRows.forEach(row => {
+                const cells = row.querySelectorAll('td');
                 const rowData = Array.from(cells).map(cell => {
                     let text = cell.textContent || '';
                     return '"' + text.replace(/"/g, '""') + '"';
@@ -3150,8 +3227,8 @@ function Export-ScanResults {
         }
 
         function filterLiveHosts() {
-            const table = document.getElementById('resultsTable');
-            const rows = table.querySelectorAll('tbody tr');
+            const bodyTable = document.getElementById('resultsTable');
+            const rows = bodyTable.querySelectorAll('tbody tr');
             rows.forEach(row => {
                 const statusCell = row.querySelector('td:nth-child(2)');
                 const isAlive = statusCell && statusCell.textContent.includes('Alive');
@@ -3160,8 +3237,8 @@ function Export-ScanResults {
         }
 
         function showAllHosts() {
-            const table = document.getElementById('resultsTable');
-            const rows = table.querySelectorAll('tbody tr');
+            const bodyTable = document.getElementById('resultsTable');
+            const rows = bodyTable.querySelectorAll('tbody tr');
             rows.forEach(row => {
                 row.style.display = '';
             });
