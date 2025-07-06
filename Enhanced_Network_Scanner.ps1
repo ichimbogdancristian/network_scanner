@@ -113,7 +113,7 @@ param(
     
     [Parameter(HelpMessage = "Array of ports to scan")]
     [ValidateRange(1, 65535)]
-    [int[]]$Ports = @(21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 993, 995, 1433, 3306, 3389, 5432, 5900, 8080),
+    [int[]]$Ports = @(21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 993, 995, 1035, 1433, 1521, 3306, 3389, 37777, 5432, 5900, 8080),
     
     [Parameter(HelpMessage = "Output directory path")]
     [ValidateScript({ Test-Path -Path $_ -IsValid })]
