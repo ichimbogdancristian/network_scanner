@@ -34,6 +34,82 @@ A comprehensive PowerShell-based network scanning tool with advanced vulnerabili
 - **Progress Tracking**: Real-time scan progress and ETA calculations
 - **Flexible Configuration**: Extensive customization options
 
+
+
+## Core Infrastructure Map (Region 2)
+
+This region provides the foundational building blocks for the script, supporting all other modules:
+
+| Component              | Function(s)                       | Purpose                                    |
+|------------------------|------------------------------------|--------------------------------------------|
+| Logging System         | `Write-Log`, `Initialize-LoggingSystem` | Centralized logging, color/file output      |
+| Performance Monitoring | `Start-PerformanceMonitoring`, `Stop-PerformanceMonitoring` | Memory/resource monitoring, auto-GC         |
+| Error Handling         | `Invoke-ErrorHandler`              | Consistent error handling and logging       |
+| System Diagnostics     | `Test-SystemInformation`           | System info and diagnostics                 |
+
+All functions are reusable and robust, designed to support the main scanning engine and all other script regions.
+
+---
+
+## Execution Timeline & Logic Diagram
+
+```mermaid
+gantt
+    title Enhanced Network Scanner Execution Timeline
+    dateFormat  HH:mm
+    section Main Flow
+    Environment Setup         :done,    env, 00:00, 1m
+    Checkpoint Setup         :done,    chk, after env, 0.5m
+    Host Discovery           :done,    host, after chk, 1m
+    Port Scanning            :active,  port, after host, 2m
+    Service Detection        :         svc,  after port, 1.5m
+    Vulnerability Assessment :         vuln, after svc, 1.5m
+    Reporting & Output       :         rep,  after vuln, 0.5m
+    Cleanup                  :         clean, after rep, 0.2m
+```
+
+
+### Execution Logic (If-This-Then-That Diagram)
+
+```mermaid
+flowchart TD
+    Start([Start Script])
+    Interactive{Interactive Mode?}
+    Interactive -- Yes --> InitSession[Initialize Interactive Session]
+    Interactive -- No  --> SetRange[Set Network Range]
+    InitSession --> InitEnv[Initialize Environment]
+    SetRange --> InitEnv
+    InitEnv --> Checkpoint[Checkpoint Setup]
+    Checkpoint --> HostDisc[Host Discovery]
+    HostDisc --> PortScan[Port Scanning]
+    PortScan --> SvcDetect{Service Detection Enabled?}
+    SvcDetect -- Yes --> Svc[Service Detection]
+    SvcDetect -- No  --> VulnAssessQ{Vulnerability Assessment Enabled?}
+    Svc --> VulnAssessQ
+    VulnAssessQ -- Yes --> Vuln[Vulnerability Assessment]
+    VulnAssessQ -- No  --> Report[Reporting & Output]
+    Vuln --> Report
+    Report --> Clean[Cleanup]
+    Clean --> End([End])
+
+    %% If-This-Then-That logic
+    click Interactive "#parameters" "If Interactive mode is enabled, start session, else set range"
+    click SvcDetect "#parameters" "If Service Detection is enabled, run Service Detection, else check Vulnerability Assessment"
+    click VulnAssessQ "#parameters" "If Vulnerability Assessment is enabled, run it, else go to Reporting"
+```
+
+## Phases
+- **Environment Setup**: Initializes logging, parameters, and diagnostics.
+- **Checkpoint Setup**: Prepares temp files for resumability.
+- **Host Discovery**: Identifies live hosts in the target range.
+- **Port Scanning**: Scans discovered hosts for open ports.
+- **Service Detection** (optional): Identifies services on open ports.
+- **Vulnerability Assessment** (optional): Checks for known vulnerabilities.
+- **Reporting & Output**: Generates HTML/CSV reports and sends notifications.
+- **Cleanup**: Finalizes and cleans up resources.
+
+---
+
 ## Requirements
 
 - **PowerShell**: Version 5.1 or higher

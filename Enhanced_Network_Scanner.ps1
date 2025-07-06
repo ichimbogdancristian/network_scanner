@@ -251,7 +251,40 @@ enum LogLevel {
 
 #endregion
 
+
 #region 2. CORE INFRASTRUCTURE
+<#
+================================================================================
+                          REGION 2: CORE INFRASTRUCTURE MAP
+================================================================================
+
+This region provides the foundational building blocks for the script, including:
+
+1. Logging System
+   - Write-Log
+   - Initialize-LoggingSystem
+
+2. Performance Monitoring
+   - Start-PerformanceMonitoring
+   - Stop-PerformanceMonitoring
+
+3. Error Handling
+   - Invoke-ErrorHandler
+
+4. System Diagnostics
+   - Test-SystemInformation
+
+Each function is designed to be reusable and robust, supporting the main scanning engine and all other script regions.
+
+Quick Reference:
+    Write-Log                # Centralized logging with color and file output
+    Initialize-LoggingSystem # Prepares log files and headers
+    Start-PerformanceMonitoring / Stop-PerformanceMonitoring # Memory and resource monitoring
+    Invoke-ErrorHandler      # Consistent error handling and logging
+    Test-SystemInformation   # Diagnostic and system info gathering
+
+================================================================================
+#>
 
 function Write-Log {
     <#
