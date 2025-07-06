@@ -1,58 +1,54 @@
 <#
 .SYNOPSIS
-    Enhanced Network Scanner with Vulnerability Assessment
-    
+    Enhanced Network Scanner
+
 .DESCRIPTION
-    A comprehensive network scanning tool with service detection, vulnerability assessment,
-    memory monitoring, and intelligent resource management capabilities.
-    
+    A comprehensive network scanning tool with service detection, memory monitoring, and intelligent resource management capabilities.
+
 .PARAMETER NetworkRange
     The network range to scan (e.g., "192.168.1.0/24")
-    
+
 .PARAMETER Ports
     Array of ports to scan (default: common ports)
-    
+
 .PARAMETER OutputPath
     Path for output files (default: current directory)
-    
+
 .PARAMETER MaxThreads
     Maximum number of concurrent threads (auto-calculated if not specified)
-    
+
 .PARAMETER Timeout
     Timeout in milliseconds for network operations (default: 2000)
-    
+
 .PARAMETER EnableEmail
     Enable email notifications
-    
+
 .PARAMETER EmailTo
     Email address for notifications
-    
+
 .PARAMETER SMTPServer
     SMTP server for email notifications
-    
+
 .PARAMETER SMTPUsername
     SMTP username for authentication
-    
-.PARAMETER EnableVulnScan
-    Enable vulnerability assessment
-    
+
 .PARAMETER MemoryLimitMB
     Memory limit in MB before triggering garbage collection (default: 200)
-    
+
 .PARAMETER VerboseOutput
     Enable verbose output
-    
+
 .EXAMPLE
-    .\Enhanced_Network_Scanner.ps1 -NetworkRange "192.168.1.0/24" -EnableVulnScan -VerboseOutput
-    
+    .\Enhanced_Network_Scanner.ps1 -NetworkRange "192.168.1.0/24" -VerboseOutput
+
 .EXAMPLE
     .\Enhanced_Network_Scanner.ps1 -NetworkRange "10.0.0.0/16" -Ports @(80,443,22,21) -OutputPath "C:\Scans"
-    
+
 .NOTES
     Author: Enhanced Network Scanner
     Version: 2.0
     Created: July 2025
-    
+
     Requirements:
     - PowerShell 5.1 or higher
     - Network connectivity to target ranges
@@ -79,19 +75,15 @@
    - Port scanning capabilities
    - Service detection and banner grabbing
 
-4. VULNERABILITY ASSESSMENT
-   - Security checks and assessments
-   - Compliance validation
-
-5. THREAD MANAGEMENT
+4. THREAD MANAGEMENT
    - Intelligent thread optimization
    - Resource management
 
-6. REPORTING & OUTPUT
+5. REPORTING & OUTPUT
    - Result formatting and export
    - Email notifications
 
-7. MAIN EXECUTION FLOW
+6. MAIN EXECUTION FLOW
    - Parameter validation
    - Scanning orchestration
    - Cleanup and finalization
@@ -105,58 +97,130 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false, HelpMessage = "Network range to scan (e.g., '192.168.1.0/24')")]
-    [ValidateScript({ 
+    [ValidateScript({
         if ([string]::IsNullOrEmpty($_)) { return $true }
-        return $_ -match '^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$'
+        return $_ -match '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
     })]
-    [string]$NetworkRange,
-    
+    [string]$NetworkRange
+    ,
     [Parameter(HelpMessage = "Array of ports to scan")]
-    [ValidateRange(1, 65535)]
-    [int[]]$Ports = @(21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 993, 995, 1035, 1433, 1521, 3306, 3389, 37777, 5432, 5900, 8080),
-    
+    [object[]]$Ports
+    ,
     [Parameter(HelpMessage = "Output directory path")]
     [ValidateScript({ Test-Path -Path $_ -IsValid })]
-    [string]$OutputPath = (Get-Location).Path,
-    
+    [string]$OutputPath = (Get-Location).Path
+    ,
     [Parameter(HelpMessage = "Maximum number of concurrent threads")]
     [ValidateRange(1, 5000)]
-    [int]$MaxThreads,
-    
+    [int]$MaxThreads
+    ,
     [Parameter(HelpMessage = "Timeout in milliseconds for network operations")]
     [ValidateRange(500, 30000)]
-    [int]$Timeout = 2000,
-    
+    [int]$Timeout = 2000
+    ,
     [Parameter(HelpMessage = "Host discovery method")]
     [ValidateSet("ICMP", "TCP", "Both", "Aggressive")]
-    [string]$Discovery = "Both",
-    
+    [string]$Discovery = "Both"
+    ,
     [Parameter(HelpMessage = "Enable email notifications")]
-    [switch]$EnableEmail,
-    
+    [switch]$EnableEmail
+    ,
     [Parameter(HelpMessage = "Email address for notifications")]
     [ValidatePattern('^[^@\s]+@[^@\s]+\.[^@\s]+$')]
-    [string]$EmailTo,
-    
+    [string]$EmailTo
+    ,
     [Parameter(HelpMessage = "SMTP server for email notifications")]
-    [string]$SMTPServer = "smtp.gmail.com",
-    
+    [string]$SMTPServer = "smtp.gmail.com"
+    ,
     [Parameter(HelpMessage = "SMTP username for authentication")]
-    [string]$SMTPUsername,
-    
-    [Parameter(HelpMessage = "Enable vulnerability assessment")]
-    [switch]$EnableVulnScan,
-    
+    [string]$SMTPUsername
+    ,
     [Parameter(HelpMessage = "Memory limit in MB before triggering garbage collection")]
     [ValidateRange(50, 2048)]
-    [int]$MemoryLimitMB = 200,
-    
+    [int]$MemoryLimitMB = 200
+    ,
     [Parameter(HelpMessage = "Enable verbose output")]
-    [switch]$VerboseOutput,
-    
+    [switch]$VerboseOutput
+    ,
     [Parameter(HelpMessage = "Enable interactive mode for prompts")]
     [switch]$Interactive
 )
+
+# Unified port list for all scanning and discovery functions (with protocol and service name)
+$Global:UnifiedPorts = @(
+    @{ Port = 21; Protocol = "TCP"; Service = "FTP" },
+    @{ Port = 22; Protocol = "TCP"; Service = "SSH" },
+    @{ Port = 23; Protocol = "TCP"; Service = "Telnet" },
+    @{ Port = 25; Protocol = "TCP"; Service = "SMTP" },
+    @{ Port = 53; Protocol = "UDP"; Service = "DNS" },
+    @{ Port = 53; Protocol = "TCP"; Service = "DNS" },
+    @{ Port = 67; Protocol = "UDP"; Service = "DHCP" },
+    @{ Port = 80; Protocol = "TCP"; Service = "HTTP" },
+    @{ Port = 110; Protocol = "TCP"; Service = "POP3" },
+    @{ Port = 123; Protocol = "UDP"; Service = "NTP" },
+    @{ Port = 135; Protocol = "TCP"; Service = "RPC" },
+    @{ Port = 139; Protocol = "TCP"; Service = "NetBIOS" },
+    @{ Port = 143; Protocol = "TCP"; Service = "IMAP" },
+    @{ Port = 161; Protocol = "UDP"; Service = "SNMP" },
+    @{ Port = 389; Protocol = "TCP"; Service = "LDAP" },
+    @{ Port = 389; Protocol = "UDP"; Service = "LDAP" },
+    @{ Port = 443; Protocol = "TCP"; Service = "HTTPS" },
+    @{ Port = 445; Protocol = "TCP"; Service = "SMB" },
+    @{ Port = 993; Protocol = "TCP"; Service = "IMAPS" },
+    @{ Port = 995; Protocol = "TCP"; Service = "POP3S" },
+    @{ Port = 1035; Protocol = "TCP"; Service = "Custom/Unknown" },
+    @{ Port = 1433; Protocol = "TCP"; Service = "SQL Server" },
+    @{ Port = 1521; Protocol = "TCP"; Service = "Oracle" },
+    @{ Port = 3306; Protocol = "TCP"; Service = "MySQL" },
+    @{ Port = 3389; Protocol = "TCP"; Service = "RDP" },
+    @{ Port = 37777; Protocol = "TCP"; Service = "Dahua" },
+    @{ Port = 5432; Protocol = "TCP"; Service = "PostgreSQL" },
+    @{ Port = 5900; Protocol = "TCP"; Service = "VNC" },
+    @{ Port = 6379; Protocol = "TCP"; Service = "Redis" },
+    @{ Port = 8080; Protocol = "TCP"; Service = "HTTP-Alt" },
+    @{ Port = 8443; Protocol = "TCP"; Service = "HTTPS-Alt" },
+    @{ Port = 27017; Protocol = "TCP"; Service = "MongoDB" }
+)
+
+if (-not $Ports -or $Ports.Count -eq 0) {
+    $Ports = $Global:UnifiedPorts
+}
+elseif ($Ports[0] -is [int]) {
+    $Ports = $Ports | ForEach-Object { @{ Port = $_; Protocol = "TCP" } }
+}
+elseif ($Ports[0] -is [hashtable] -and $Ports[0].ContainsKey('Port') -and $Ports[0].ContainsKey('Protocol')) {
+    # Already correct format, do nothing
+}
+elseif ($Ports -is [hashtable] -and $Ports.ContainsKey('Port') -and $Ports.ContainsKey('Protocol')) {
+    $Ports = @($Ports)
+}
+else {
+    throw "Invalid -Ports parameter: must be an array of integers or array of @{ Port = <int>; Protocol = <string> } hashtables."
+}
+
+# Update all references to Normalize-PortList to ConvertTo-PortList
+
+function ConvertTo-PortList {
+    param(
+        [Parameter(Mandatory = $false)]
+        [object[]]$PortList
+    )
+    if (-not $PortList -or $PortList.Count -eq 0) {
+        return @($Global:UnifiedPorts)
+    }
+    elseif ($PortList[0] -is [int]) {
+        return $PortList | ForEach-Object { @{ Port = $_; Protocol = "TCP" } }
+    }
+    elseif ($PortList[0] -is [hashtable] -and $PortList[0].ContainsKey('Port') -and $PortList[0].ContainsKey('Protocol')) {
+        return $PortList
+    }
+    elseif ($PortList -is [hashtable] -and $PortList.ContainsKey('Port') -and $PortList.ContainsKey('Protocol')) {
+        return @($PortList)
+    }
+    else {
+        throw "Invalid PortList: must be an array of integers or array of @{ Port = <int>; Protocol = <string> } hashtables."
+    }
+}
 
 # Load required assemblies for HTML encoding
 [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
@@ -165,54 +229,29 @@ param(
 $script:NetworkRange = if ([string]::IsNullOrWhiteSpace($NetworkRange)) { $null } else { $NetworkRange }
 $script:EnablePortScanning = $true
 $script:EnableServiceDetection = $true
-$script:EnableVulnScan = $EnableVulnScan
 
 # Global script variables
 $Global:ScriptConfig = @{
-    StartTime               = Get-Date
-    LogFile                = Join-Path $OutputPath "NetworkScan_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-    ReportFile             = Join-Path $OutputPath "NetworkScan_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
-    TotalHosts             = 0
-    ScannedHosts           = 0
-    LiveHosts              = 0
-    TotalOpenPorts         = 0
-    VulnerabilitiesFound   = 0
-    ProcessId              = $PID
+    StartTime                 = Get-Date
+    LogFile                   = Join-Path $OutputPath "NetworkScan_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    ReportFile                = Join-Path $OutputPath "NetworkScan_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
+    TotalHosts                = 0
+    ScannedHosts              = 0
+    LiveHosts                 = 0
+    TotalOpenPorts            = 0
+    ProcessId                 = $PID
     EnablePerformanceCounters = $true
-    MemoryMonitor          = $null
-    MemoryTimer            = $null
-    PerformanceProfiler    = $null
+    MemoryMonitor             = $null
+    MemoryTimer               = $null
+    PerformanceProfiler       = $null
 }
 
-# Common service ports mapping
-$Global:ServicePorts = @{
-    21    = "FTP"
-    22    = "SSH"
-    23    = "Telnet"
-    25    = "SMTP"
-    53    = "DNS"
-    80    = "HTTP"
-    110   = "POP3"
-    135   = "RPC"
-    139   = "NetBIOS"
-    143   = "IMAP"
-    443   = "HTTPS"
-    445   = "SMB"
-    993   = "IMAPS"
-    995   = "POP3S"
-    1433  = "SQL Server"
-    1521  = "Oracle"
-    3306  = "MySQL"
-    3389  = "RDP"
-    5432  = "PostgreSQL"
-    5900  = "VNC"
-    6379  = "Redis"
-    8080  = "HTTP-Alt"
-    8443  = "HTTPS-Alt"
-    27017 = "MongoDB"
-    161   = "SNMP"
-    389   = "LDAP"
-    636   = "LDAPS"
+# Service port mapping (auto-generated from $Global:UnifiedPorts, TCP only by default)
+$Global:ServicePorts = @{}
+foreach ($entry in $Global:UnifiedPorts) {
+    if ($entry.Protocol -eq 'TCP' -and -not $Global:ServicePorts.ContainsKey($entry.Port)) {
+        $Global:ServicePorts[$entry.Port] = $entry.Service
+    }
 }
 
 # Host discovery methods
@@ -233,13 +272,7 @@ enum HostStatus {
     TimedOut
 }
 
-# Vulnerability severity levels
-enum VulnerabilitySeverity {
-    Low
-    Medium
-    High
-    Critical
-}
+# ...existing code...
 
 # Log levels
 enum LogLevel {
@@ -592,7 +625,7 @@ function Get-LocalNetworkRange {
             try {
                 # Get IP configuration for this adapter
                 $ipConfig = Get-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
-                           Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" }
+                Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" }
                 
                 if ($ipConfig) {
                     foreach ($config in $ipConfig) {
@@ -794,22 +827,7 @@ function Initialize-InteractiveSession {
             Write-Host "✗ Service detection disabled (requires port scanning)" -ForegroundColor Gray
         }
         
-        # 4. Vulnerability Assessment Option
-        if ($script:EnablePortScanning) {
-            $enableVulnAssessment = Get-UserInput -Prompt "Perform vulnerability assessment?" -IsYesNo -DefaultYesNo "Y"
-            if ($enableVulnAssessment) {
-                Write-Host "✓ Vulnerability assessment enabled" -ForegroundColor Green
-                $script:EnableVulnScan = $true
-            }
-            else {
-                Write-Host "✗ Vulnerability assessment disabled" -ForegroundColor Yellow
-                $script:EnableVulnScan = $false
-            }
-        }
-        else {
-            $script:EnableVulnScan = $false
-            Write-Host "✗ Vulnerability assessment disabled (requires port scanning)" -ForegroundColor Gray
-        }
+        # ...existing code...
         
         # Summary
         Write-Host "`n" -NoNewline
@@ -820,7 +838,7 @@ function Initialize-InteractiveSession {
         Write-Host "Total Hosts:             $($hostList.Count)" -ForegroundColor White
         Write-Host "Port Scanning:           $(if ($script:EnablePortScanning) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($script:EnablePortScanning) { 'Green' } else { 'Yellow' })
         Write-Host "Service Detection:       $(if ($script:EnableServiceDetection) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($script:EnableServiceDetection) { 'Green' } else { 'Yellow' })
-        Write-Host "Vulnerability Assessment: $(if ($script:EnableVulnScan) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($script:EnableVulnScan) { 'Green' } else { 'Yellow' })
+        # ...existing code...
         Write-Host "Ports to Scan:           $($Ports -join ', ')" -ForegroundColor White
         Write-Host "Discovery Method:        $Discovery" -ForegroundColor White
         Write-Host "Output Directory:        $OutputPath" -ForegroundColor White
@@ -913,7 +931,7 @@ function Test-HostConnectivity {
         [DiscoveryMethod]$Method = [DiscoveryMethod]::Both,
         
         [Parameter()]
-        [int[]]$CommonPorts = @(80, 443, 22, 21, 25, 53, 135, 139, 445, 993, 995, 1433, 3389)
+        [object[]]$CommonPorts = $Global:UnifiedPorts
     )
     
     $result = @{
@@ -926,22 +944,22 @@ function Test-HostConnectivity {
         Details      = @()
     }
     
+    # Extract port numbers if CommonPorts is array of hashtables
+    $portNumbers = $CommonPorts | ForEach-Object {
+        if ($_ -is [hashtable] -and $_.ContainsKey('Port')) { $_.Port } else { $_ }
+    }
     try {
         Write-Log "Testing connectivity for $IPAddress using method: $Method" -Level ([LogLevel]::DEBUG)
-        
         switch ($Method) {
             ([DiscoveryMethod]::ICMP) {
                 $result = Test-ICMPConnectivity -IPAddress $IPAddress -TimeoutMs $TimeoutMs -MaxRetries $MaxRetries
             }
-            
             ([DiscoveryMethod]::TCP) {
-                $result = Test-TCPConnectivity -IPAddress $IPAddress -TimeoutMs $TimeoutMs -CommonPorts $CommonPorts
+                $result = Test-TCPConnectivity -IPAddress $IPAddress -TimeoutMs $TimeoutMs -CommonPorts $portNumbers
             }
-            
             ([DiscoveryMethod]::Both) {
                 # Try ICMP first (faster)
                 $icmpResult = Test-ICMPConnectivity -IPAddress $IPAddress -TimeoutMs $TimeoutMs -MaxRetries $MaxRetries
-                
                 if ($icmpResult.IsAlive) {
                     $result = $icmpResult
                     $result.Details += "ICMP ping successful"
@@ -949,8 +967,7 @@ function Test-HostConnectivity {
                 else {
                     # ICMP failed, try TCP probes
                     Write-Log "ICMP failed for $IPAddress, attempting TCP discovery..." -Level ([LogLevel]::DEBUG)
-                    $tcpResult = Test-TCPConnectivity -IPAddress $IPAddress -TimeoutMs ($TimeoutMs / 2) -CommonPorts $CommonPorts[0..4]  # Test fewer ports for speed
-                    
+                    $tcpResult = Test-TCPConnectivity -IPAddress $IPAddress -TimeoutMs ($TimeoutMs / 2) -CommonPorts ($portNumbers[0..([Math]::Min(4, $portNumbers.Count - 1))])  # Test fewer ports for speed
                     if ($tcpResult.IsAlive) {
                         $result = $tcpResult
                         $result.Details += "ICMP blocked, TCP probe successful"
@@ -962,15 +979,12 @@ function Test-HostConnectivity {
                     }
                 }
             }
-            
             ([DiscoveryMethod]::Aggressive) {
-                $result = Test-AggressiveDiscovery -IPAddress $IPAddress -TimeoutMs $TimeoutMs -CommonPorts $CommonPorts
+                $result = Test-AggressiveDiscovery -IPAddress $IPAddress -TimeoutMs $TimeoutMs -CommonPorts $portNumbers
             }
         }
-        
         # Log discovery result
         Write-Log "Host discovery result for $IPAddress`: Status=$($result.Status), Method=$($result.Method), ResponseTime=$($result.ResponseTime)ms" -Level ([LogLevel]::DEBUG)
-        
     }
     catch {
         $result.Error = $_.Exception.Message
@@ -1078,7 +1092,7 @@ function Test-TCPConnectivity {
         [int]$TimeoutMs = 1000,
         
         [Parameter()]
-        [int[]]$CommonPorts = @(80, 443, 22, 21, 25, 53, 135, 139, 445)
+        [object[]]$CommonPorts
     )
     
     $result = @{
@@ -1094,7 +1108,11 @@ function Test-TCPConnectivity {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $openPorts = @()
     
-    foreach ($port in $CommonPorts) {
+    # Extract port numbers if CommonPorts is array of hashtables
+    $portNumbers = $CommonPorts | ForEach-Object {
+        if ($_ -is [hashtable] -and $_.ContainsKey('Port')) { $_.Port } else { $_ }
+    }
+    foreach ($port in $portNumbers) {
         $tcpClient = $null
         try {
             $tcpClient = New-Object System.Net.Sockets.TcpClient
@@ -1152,7 +1170,7 @@ function Test-AggressiveDiscovery {
         [int]$TimeoutMs = 2000,
         
         [Parameter()]
-        [int[]]$CommonPorts = @(80, 443, 22, 21, 25, 53, 135, 139, 445, 993, 995, 1433, 3389)
+        [object[]]$CommonPorts = $Global:UnifiedPorts
     )
     
     $result = @{
@@ -1177,8 +1195,12 @@ function Test-AggressiveDiscovery {
         return $result
     }
     
+    # Extract port numbers if CommonPorts is array of hashtables
+    $portNumbers = $CommonPorts | ForEach-Object {
+        if ($_ -is [hashtable] -and $_.ContainsKey('Port')) { $_.Port } else { $_ }
+    }
     # 2. Try TCP to more ports
-    $tcpResult = Test-TCPConnectivity -IPAddress $IPAddress -TimeoutMs ($TimeoutMs / 3) -CommonPorts $CommonPorts
+    $tcpResult = Test-TCPConnectivity -IPAddress $IPAddress -TimeoutMs ($TimeoutMs / 3) -CommonPorts $portNumbers
     if ($tcpResult.IsAlive) {
         $result = $tcpResult
         $result.Method = "Aggressive-TCP"
@@ -1241,48 +1263,21 @@ function Test-UDPConnectivity {
         Details      = @()
     }
     
-    # Common UDP services for discovery
-    $udpPorts = @{
-        53  = "DNS"
-        161 = "SNMP"
-        123 = "NTP"
-        67  = "DHCP"
-    }
-    
-    foreach ($portInfo in $udpPorts.GetEnumerator()) {
-        $port = $portInfo.Key
-        $service = $portInfo.Value
-        
+    # Use unified UDP ports for discovery
+    $udpPorts = $Global:UnifiedPorts | Where-Object { $_.Protocol -eq 'UDP' } | Select-Object -ExpandProperty Port -Unique
+    foreach ($port in $udpPorts) {
         try {
             $udpClient = New-Object System.Net.Sockets.UdpClient
             $udpClient.Client.ReceiveTimeout = $TimeoutMs
-            
-            switch ($service) {
-                "DNS" {
-                    # Send DNS query
-                    $dnsQuery = @(0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01)
-                    $udpClient.Send($dnsQuery, $dnsQuery.Length, $IPAddress, $port) | Out-Null
-                }
-                "SNMP" {
-                    # Send SNMP GetRequest
-                    $snmpQuery = @(0x30, 0x19, 0x02, 0x01, 0x00, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0xa0, 0x0c, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x00)
-                    $udpClient.Send($snmpQuery, $snmpQuery.Length, $IPAddress, $port) | Out-Null
-                }
-                default {
-                    # Generic UDP probe
-                    $genericProbe = @(0x00, 0x01, 0x02, 0x03)
-                    $udpClient.Send($genericProbe, $genericProbe.Length, $IPAddress, $port) | Out-Null
-                }
-            }
-            
-            # Try to receive response
+            # Send a generic probe (could be improved for each service)
+            $probe = @(0x00, 0x01, 0x02, 0x03)
+            $udpClient.Send($probe, $probe.Length, $IPAddress, $port) | Out-Null
             $remoteEndPoint = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
             $response = $udpClient.Receive([ref]$remoteEndPoint)
-            
             if ($response -and $response.Length -gt 0) {
                 $result.IsAlive = $true
                 $result.Status = [HostStatus]::Alive
-                $result.Details += "UDP response from $service on port $port"
+                $result.Details += "UDP response on port $port"
                 break
             }
         }
@@ -1393,12 +1388,12 @@ function Get-ServiceInfo {
     )
     
     $serviceInfo = @{
-        Port      = $Port
-        Service   = if ($Global:ServicePorts.ContainsKey($Port)) { $Global:ServicePorts[$Port] } else { "Unknown" }
-        Version   = "Unknown"
-        Banner    = ""
-        IsSecure  = $false
-        IsOpen    = $false
+        Port     = $Port
+        Service  = if ($Global:ServicePorts.ContainsKey($Port)) { $Global:ServicePorts[$Port] } else { "Unknown" }
+        Version  = "Unknown"
+        Banner   = ""
+        IsSecure = $false
+        IsOpen   = $false
     }
     
     $tcpClient = $null
@@ -1448,13 +1443,13 @@ function Get-ServiceInfo {
                         
                         # Update service name based on banner
                         switch -Regex ($banner) {
-                            "nginx"         { $serviceInfo.Service = "nginx" }
-                            "Apache"        { $serviceInfo.Service = "Apache" }
+                            "nginx" { $serviceInfo.Service = "nginx" }
+                            "Apache" { $serviceInfo.Service = "Apache" }
                             "Microsoft-IIS" { $serviceInfo.Service = "IIS" }
-                            "OpenSSH"       { $serviceInfo.Service = "OpenSSH" }
-                            "vsftpd"        { $serviceInfo.Service = "vsftpd" }
-                            "Postfix"       { $serviceInfo.Service = "Postfix" }
-                            "Microsoft"     { $serviceInfo.Service = "Microsoft" }
+                            "OpenSSH" { $serviceInfo.Service = "OpenSSH" }
+                            "vsftpd" { $serviceInfo.Service = "vsftpd" }
+                            "Postfix" { $serviceInfo.Service = "Postfix" }
+                            "Microsoft" { $serviceInfo.Service = "Microsoft" }
                         }
                     }
                     
@@ -1492,25 +1487,31 @@ function Invoke-PortScan {
         [string]$IPAddress,
         
         [Parameter(Mandatory = $true)]
-        [int[]]$PortList,
+        [object[]]$PortList,
         
         [Parameter()]
         [int]$TimeoutMs = 2000
     )
     
     $scanResult = @{
-        IPAddress    = $IPAddress
-        OpenPorts    = @()
-        Services     = @()
-        TotalPorts   = $PortList.Count
-        ScanTime     = 0
-        Errors       = @()
+        IPAddress  = $IPAddress
+        OpenPorts  = @()
+        Services   = @()
+        TotalPorts = $PortList.Count
+        ScanTime   = 0
+        Errors     = @()
     }
     
     try {
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        
-        foreach ($port in $PortList) {
+
+        # Split port objects by protocol
+        $tcpPorts = $PortList | Where-Object { $_.Protocol -eq 'TCP' }
+        $udpPorts = $PortList | Where-Object { $_.Protocol -eq 'UDP' }
+
+        # TCP scan
+        foreach ($portObj in $tcpPorts) {
+            $port = $portObj.Port
             try {
                 $serviceInfo = Get-ServiceInfo -IPAddress $IPAddress -Port $port -TimeoutMs $TimeoutMs
                 if ($serviceInfo.IsOpen) {
@@ -1520,13 +1521,34 @@ function Invoke-PortScan {
                 }
             }
             catch {
-                $scanResult.Errors += "Port scan failed for port $port`: $($_.Exception.Message)"
+                $scanResult.Errors += "Port scan failed for port $port (TCP): $($_.Exception.Message)"
             }
         }
-        
+
+        # UDP scan (basic probe)
+        foreach ($portObj in $udpPorts) {
+            $port = $portObj.Port
+            try {
+                $udpClient = New-Object System.Net.Sockets.UdpClient
+                $udpClient.Client.ReceiveTimeout = $TimeoutMs
+                $probe = @(0x00, 0x01, 0x02, 0x03)
+                $udpClient.Send($probe, $probe.Length, $IPAddress, $port) | Out-Null
+                $remoteEndPoint = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+                $response = $udpClient.Receive([ref]$remoteEndPoint)
+                if ($response -and $response.Length -gt 0) {
+                    $scanResult.OpenPorts += $port
+                    $scanResult.Services += @{ Port = $port; Service = ($Global:ServicePorts[$port] | Out-String).Trim(); Protocol = 'UDP'; IsOpen = $true }
+                }
+                $udpClient.Close()
+            }
+            catch {
+                $scanResult.Errors += ("UDP scan failed for port ${port}: $($_.Exception.Message)")
+            }
+        }
+
         $stopwatch.Stop()
         $scanResult.ScanTime = $stopwatch.ElapsedMilliseconds
-        
+
         Write-Log "Port scan completed for $IPAddress - Found $($scanResult.OpenPorts.Count) open ports in $($scanResult.ScanTime)ms" -Level ([LogLevel]::DEBUG)
     }
     catch {
@@ -1547,7 +1569,7 @@ function Invoke-ComprehensiveHostScan {
         [string]$IPAddress,
         
         [Parameter(Mandatory = $true)]
-        [int[]]$PortList,
+        [object[]]$PortList,
         
         [Parameter()]
         [int]$TimeoutMs = 2000,
@@ -1557,16 +1579,16 @@ function Invoke-ComprehensiveHostScan {
     )
     
     $hostResult = @{
-        IPAddress       = $IPAddress
-        IsAlive         = $false
-        ResponseTime    = 0
-        OpenPorts       = @()
-        Services        = @()
-        Vulnerabilities = @()
-        ScanTime        = 0
-        Errors          = @()
-        Status          = [HostStatus]::Unknown
-        DiscoveryMethod = $DiscoveryMethod
+        IPAddress        = $IPAddress
+        IsAlive          = $false
+        ResponseTime     = 0
+        OpenPorts        = @()
+        Services         = @()
+        # ...existing code...
+        ScanTime         = 0
+        Errors           = @()
+        Status           = [HostStatus]::Unknown
+        DiscoveryMethod  = $DiscoveryMethod
         DiscoveryDetails = @()
     }
     
@@ -1596,15 +1618,11 @@ function Invoke-ComprehensiveHostScan {
             $hostResult.Services = $portScanResult.Services
             $hostResult.Errors += $portScanResult.Errors
             
-            # Perform vulnerability assessment if enabled AND ports are open
-            if ($EnableVulnScan -and $hostResult.OpenPorts.Count -gt 0) {
-                $hostResult.Vulnerabilities = Test-HostVulnerabilities -IPAddress $IPAddress -OpenPorts $hostResult.OpenPorts -Services $hostResult.Services
-                $Global:ScriptConfig.VulnerabilitiesFound += $hostResult.Vulnerabilities.Count
-            }
+            # ...existing code...
         }
         else {
             # Host is not alive - skip all further scanning
-            Write-Log "Host $IPAddress is not responsive (Status: $($hostResult.Status)) - skipping port scan and vulnerability assessment" -Level ([LogLevel]::DEBUG)
+            Write-Log "Host $IPAddress is not responsive (Status: $($hostResult.Status)) - skipping port scan" -Level ([LogLevel]::DEBUG)
             
             # Add reason for skipping
             switch ($hostResult.Status) {
@@ -1631,8 +1649,9 @@ function Invoke-ComprehensiveHostScan {
         $Global:ScriptConfig.ScannedHosts++
         
         $scanSummary = if ($hostResult.IsAlive) {
-            "Alive: YES, Ports: $($hostResult.OpenPorts.Count), Vulnerabilities: $($hostResult.Vulnerabilities.Count)"
-        } else {
+            "Alive: YES, Ports: $($hostResult.OpenPorts.Count)"
+        }
+        else {
             "Alive: NO (Status: $($hostResult.Status))"
         }
         
@@ -1649,159 +1668,7 @@ function Invoke-ComprehensiveHostScan {
 
 #endregion
 
-#region 4. VULNERABILITY ASSESSMENT
-
-function Test-HostVulnerabilities {
-    <#
-    .SYNOPSIS
-        Comprehensive vulnerability assessment for discovered services
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$IPAddress,
-        
-        [Parameter(Mandatory = $true)]
-        [array]$OpenPorts,
-        
-        [Parameter(Mandatory = $true)]
-        [array]$Services
-    )
-    
-    $vulnerabilities = @()
-    
-    try {
-        # Check for insecure services
-        foreach ($service in $Services) {
-            switch ($service.Service) {
-                "Telnet" {
-                    $vulnerabilities += @{
-                        Type           = "Insecure Protocol"
-                        Service        = "Telnet"
-                        Port           = $service.Port
-                        Severity       = [VulnerabilitySeverity]::High
-                        Description    = "Telnet transmits credentials in clear text"
-                        Recommendation = "Replace with SSH (port 22)"
-                        CVE            = "N/A"
-                        CVSS           = 7.5
-                    }
-                }
-                
-                "FTP" {
-                    if ($service.Banner -notmatch "FTPS|SFTP") {
-                        $vulnerabilities += @{
-                            Type           = "Insecure Protocol"
-                            Service        = "FTP"
-                            Port           = $service.Port
-                            Severity       = [VulnerabilitySeverity]::Medium
-                            Description    = "Plain FTP transmits credentials in clear text"
-                            Recommendation = "Use FTPS (port 990) or SFTP (port 22) instead"
-                            CVE            = "N/A"
-                            CVSS           = 5.3
-                        }
-                    }
-                }
-                
-                "HTTP" {
-                    if ($service.Port -eq 80 -and (443 -in $OpenPorts)) {
-                        $vulnerabilities += @{
-                            Type           = "Configuration Issue"
-                            Service        = "HTTP"
-                            Port           = $service.Port
-                            Severity       = [VulnerabilitySeverity]::Medium
-                            Description    = "HTTP service running alongside HTTPS - potential for downgrade attacks"
-                            Recommendation = "Redirect all HTTP traffic to HTTPS and implement HSTS"
-                            CVE            = "N/A"
-                            CVSS           = 4.3
-                        }
-                    }
-                }
-                
-                "SMB" {
-                    if ($service.Port -in @(139, 445)) {
-                        $vulnerabilities += @{
-                            Type           = "Network Exposure"
-                            Service        = "SMB"
-                            Port           = $service.Port
-                            Severity       = [VulnerabilitySeverity]::Medium
-                            Description    = "SMB service exposed to network - potential for lateral movement"
-                            Recommendation = "Restrict SMB access to trusted networks or disable if not needed"
-                            CVE            = "Various"
-                            CVSS           = 6.5
-                        }
-                    }
-                }
-                
-                "RDP" {
-                    if ($service.Port -eq 3389) {
-                        $vulnerabilities += @{
-                            Type           = "Network Exposure"
-                            Service        = "RDP"
-                            Port           = $service.Port
-                            Severity       = [VulnerabilitySeverity]::High
-                            Description    = "RDP service exposed - high risk for brute force attacks"
-                            Recommendation = "Use VPN access, enable NLA, implement account lockout policies"
-                            CVE            = "CVE-2019-0708"
-                            CVSS           = 9.8
-                        }
-                    }
-                }
-                
-                "SNMP" {
-                    if ($service.Port -eq 161) {
-                        $vulnerabilities += @{
-                            Type           = "Information Disclosure"
-                            Service        = "SNMP"
-                            Port           = $service.Port
-                            Severity       = [VulnerabilitySeverity]::Medium
-                            Description    = "SNMP service exposed - may reveal system information"
-                            Recommendation = "Use SNMPv3 with authentication, restrict community strings"
-                            CVE            = "N/A"
-                            CVSS           = 5.3
-                        }
-                    }
-                }
-            }
-        }
-        
-        # Check for excessive open ports
-        if ($OpenPorts.Count -gt 10) {
-            $vulnerabilities += @{
-                Type           = "Configuration Issue"
-                Service        = "Multiple"
-                Port           = "Various"
-                Severity       = [VulnerabilitySeverity]::Low
-                Description    = "Large number of open ports ($($OpenPorts.Count)) detected - increased attack surface"
-                Recommendation = "Review and close unnecessary ports, implement port-based access controls"
-                CVE            = "N/A"
-                CVSS           = 3.1
-            }
-        }
-        
-        # Check for common vulnerable port combinations
-        if (21 -in $OpenPorts -and 22 -notin $OpenPorts) {
-            $vulnerabilities += @{
-                Type           = "Missing Security Control"
-                Service        = "File Transfer"
-                Port           = "21"
-                Severity       = [VulnerabilitySeverity]::Medium
-                Description    = "FTP available but no SSH - missing secure file transfer option"
-                Recommendation = "Enable SSH/SFTP for secure file transfers"
-                CVE            = "N/A"
-                CVSS           = 4.3
-            }
-        }
-        
-        Write-Log "Vulnerability assessment completed for $IPAddress - Found $($vulnerabilities.Count) potential issues" -Level ([LogLevel]::DEBUG)
-    }
-    catch {
-        Invoke-ErrorHandler -Operation "Vulnerability Assessment for $IPAddress" -ErrorRecord $_
-    }
-    
-    return $vulnerabilities
-}
-
-#endregion
+## ...existing code...
 
 #region 5. THREAD MANAGEMENT
 
@@ -1887,11 +1754,11 @@ function Get-OptimalThreadCount {
         # Network I/O bound operations can handle more threads than CPU bound tasks
         # Use logarithmic scaling to prevent excessive thread creation on very high-core systems
         $coreMultiplier = if ($logicalProcessors -le 2) { 4 }      # 2-core: conservative
-                         elseif ($logicalProcessors -le 4) { 6 }   # 4-core: moderate
-                         elseif ($logicalProcessors -le 8) { 8 }   # 8-core: aggressive
-                         elseif ($logicalProcessors -le 16) { 10 } # 16-core: very aggressive
-                         elseif ($logicalProcessors -le 32) { 12 } # 32-core: maximum aggressive
-                         else { 15 }                               # 32+ core: ultra aggressive
+        elseif ($logicalProcessors -le 4) { 6 }   # 4-core: moderate
+        elseif ($logicalProcessors -le 8) { 8 }   # 8-core: aggressive
+        elseif ($logicalProcessors -le 16) { 10 } # 16-core: very aggressive
+        elseif ($logicalProcessors -le 32) { 12 } # 32-core: maximum aggressive
+        else { 15 }                               # 32+ core: ultra aggressive
         
         $cpuBasedThreads = $logicalProcessors * $coreMultiplier
         
@@ -1903,9 +1770,9 @@ function Get-OptimalThreadCount {
         # 3. Target-based calculation - Adaptive scaling based on scan size
         # Ensure we don't create more threads than targets, but scale appropriately
         $targetRatio = if ($TotalTargets -le 50) { 0.5 }      # Small scans: 50% thread-to-target ratio
-                      elseif ($TotalTargets -le 200) { 0.6 }  # Medium scans: 60% ratio
-                      elseif ($TotalTargets -le 1000) { 0.4 } # Large scans: 40% ratio (more efficient batching)
-                      else { 0.3 }                            # Massive scans: 30% ratio (maximum efficiency)
+        elseif ($TotalTargets -le 200) { 0.6 }  # Medium scans: 60% ratio
+        elseif ($TotalTargets -le 1000) { 0.4 } # Large scans: 40% ratio (more efficient batching)
+        else { 0.3 }                            # Massive scans: 30% ratio (maximum efficiency)
         
         $targetBasedThreads = [math]::Min($TotalTargets, [math]::Floor($TotalTargets * $targetRatio))
         
@@ -1914,12 +1781,12 @@ function Get-OptimalThreadCount {
         $systemTier = Get-SystemPerformanceTier -LogicalProcessors $logicalProcessors -FreeMemoryMB $freeMemoryMB
         
         switch ($systemTier) {
-            "Ultra"    { $maxThreadLimit = [math]::Min(2000, $logicalProcessors * 20) }  # No hardcoded limits
-            "High"     { $maxThreadLimit = [math]::Min(1500, $logicalProcessors * 15) }  # Scale with actual cores
-            "Medium"   { $maxThreadLimit = [math]::Min(1000, $logicalProcessors * 12) }  # Proportional scaling
-            "Low"      { $maxThreadLimit = [math]::Min(500, $logicalProcessors * 8) }    # Conservative scaling
-            "Minimal"  { $maxThreadLimit = [math]::Min(200, $logicalProcessors * 4) }    # Very conservative
-            default    { $maxThreadLimit = [math]::Min(300, $logicalProcessors * 6) }    # Safe fallback
+            "Ultra" { $maxThreadLimit = [math]::Min(2000, $logicalProcessors * 20) }  # No hardcoded limits
+            "High" { $maxThreadLimit = [math]::Min(1500, $logicalProcessors * 15) }  # Scale with actual cores
+            "Medium" { $maxThreadLimit = [math]::Min(1000, $logicalProcessors * 12) }  # Proportional scaling
+            "Low" { $maxThreadLimit = [math]::Min(500, $logicalProcessors * 8) }    # Conservative scaling
+            "Minimal" { $maxThreadLimit = [math]::Min(200, $logicalProcessors * 4) }    # Very conservative
+            default { $maxThreadLimit = [math]::Min(300, $logicalProcessors * 6) }    # Safe fallback
         }
         
         # INTELLIGENT ADAPTIVE CALCULATION - No hardcoded system assumptions
@@ -1930,12 +1797,12 @@ function Get-OptimalThreadCount {
         
         # Apply system tier optimization
         $tierMultiplier = switch ($systemTier) {
-            "Ultra"   { 1.5 }  # Boost maximum performance systems
-            "High"    { 1.3 }  # Moderate boost
-            "Medium"  { 1.1 }  # Slight boost
-            "Low"     { 0.9 }  # Slight reduction for stability
+            "Ultra" { 1.5 }  # Boost maximum performance systems
+            "High" { 1.3 }  # Moderate boost
+            "Medium" { 1.1 }  # Slight boost
+            "Low" { 0.9 }  # Slight reduction for stability
             "Minimal" { 0.7 }  # Conservative reduction
-            default   { 1.0 }  # No change
+            default { 1.0 }  # No change
         }
         
         $optimalThreads = [math]::Floor($baseThreads * $tierMultiplier)
@@ -2028,18 +1895,19 @@ function Get-AdaptiveThreadCount {
         # Dynamically determine maximum allowed threads based on current system state
         $systemTier = Get-SystemPerformanceTier -LogicalProcessors ([int]$env:NUMBER_OF_PROCESSORS) -FreeMemoryMB $currentFreeMemoryMB
         $dynamicMaxThreads = switch ($systemTier) {
-            "Ultra"   { [math]::Min(5000, ([int]$env:NUMBER_OF_PROCESSORS) * 25) }
-            "High"    { [math]::Min(3000, ([int]$env:NUMBER_OF_PROCESSORS) * 20) }
-            "Medium"  { [math]::Min(2000, ([int]$env:NUMBER_OF_PROCESSORS) * 15) }
-            "Low"     { [math]::Min(1000, ([int]$env:NUMBER_OF_PROCESSORS) * 10) }
+            "Ultra" { [math]::Min(5000, ([int]$env:NUMBER_OF_PROCESSORS) * 25) }
+            "High" { [math]::Min(3000, ([int]$env:NUMBER_OF_PROCESSORS) * 20) }
+            "Medium" { [math]::Min(2000, ([int]$env:NUMBER_OF_PROCESSORS) * 15) }
+            "Low" { [math]::Min(1000, ([int]$env:NUMBER_OF_PROCESSORS) * 10) }
             "Minimal" { [math]::Min(500, ([int]$env:NUMBER_OF_PROCESSORS) * 5) }
-            default   { 1000 }
+            default { 1000 }
         }
         
         # Use the more restrictive of user-specified max or dynamic calculation
         $effectiveMaxThreads = if ($MaxAllowedThreads -gt 0) { 
             [math]::Min($MaxAllowedThreads, $dynamicMaxThreads) 
-        } else { 
+        }
+        else { 
             $dynamicMaxThreads 
         }
         
@@ -2170,18 +2038,19 @@ function Get-RealTimeThreadAdjustment {
         # Dynamically determine maximum allowed threads based on current system state
         $systemTier = Get-SystemPerformanceTier -LogicalProcessors ([int]$env:NUMBER_OF_PROCESSORS) -FreeMemoryMB $currentFreeMemoryMB
         $dynamicMaxThreads = switch ($systemTier) {
-            "Ultra"   { [math]::Min(5000, ([int]$env:NUMBER_OF_PROCESSORS) * 25) }
-            "High"    { [math]::Min(3000, ([int]$env:NUMBER_OF_PROCESSORS) * 20) }
-            "Medium"  { [math]::Min(2000, ([int]$env:NUMBER_OF_PROCESSORS) * 15) }
-            "Low"     { [math]::Min(1000, ([int]$env:NUMBER_OF_PROCESSORS) * 10) }
+            "Ultra" { [math]::Min(5000, ([int]$env:NUMBER_OF_PROCESSORS) * 25) }
+            "High" { [math]::Min(3000, ([int]$env:NUMBER_OF_PROCESSORS) * 20) }
+            "Medium" { [math]::Min(2000, ([int]$env:NUMBER_OF_PROCESSORS) * 15) }
+            "Low" { [math]::Min(1000, ([int]$env:NUMBER_OF_PROCESSORS) * 10) }
             "Minimal" { [math]::Min(500, ([int]$env:NUMBER_OF_PROCESSORS) * 5) }
-            default   { 1000 }
+            default { 1000 }
         }
         
         # Use the more restrictive of user-specified max or dynamic calculation
         $effectiveMaxThreads = if ($MaxAllowedThreads -gt 0) { 
             [math]::Min($MaxAllowedThreads, $dynamicMaxThreads) 
-        } else { 
+        }
+        else { 
             $dynamicMaxThreads 
         }
         
@@ -2455,7 +2324,7 @@ function Start-AdaptiveNetworkScan {
         [string[]]$HostList,
         
         [Parameter(Mandatory = $true)]
-        [int[]]$PortList,
+        [object[]]$PortList,
         
         [Parameter(Mandatory = $true)]
         [int]$InitialThreadCount,
@@ -2470,10 +2339,8 @@ function Start-AdaptiveNetworkScan {
         [bool]$EnablePortScanning = $true,
         
         [Parameter()]
-        [bool]$EnableServiceDetection = $true,
+        [bool]$EnableServiceDetection = $true
         
-        [Parameter()]
-        [bool]$EnableVulnerabilityAssessment = $true
     )
     
     $allResults = @()
@@ -2511,7 +2378,7 @@ function Start-AdaptiveNetworkScan {
         
         # Define the script block for scanning with self-contained functions
         $scriptBlock = {
-            param($IPAddress, $PortList, $TimeoutMs, $DiscoveryMethod, $ServicePorts, $EnablePortScanning, $EnableServiceDetection, $EnableVulnerabilityAssessment)
+            param($IPAddress, $PortList, $TimeoutMs, $DiscoveryMethod, $ServicePorts, $EnablePortScanning, $EnableServiceDetection)
             
             # Simple host connectivity test with response time capture
             function Test-SimpleConnectivity {
@@ -2524,20 +2391,20 @@ function Start-AdaptiveNetworkScan {
                     
                     if ($reply.Status -eq "Success") {
                         return @{
-                            IsAlive = $true
+                            IsAlive      = $true
                             ResponseTime = $reply.RoundtripTime
                         }
                     }
                     else {
                         return @{
-                            IsAlive = $false
+                            IsAlive      = $false
                             ResponseTime = 0
                         }
                     }
                 }
                 catch {
                     return @{
-                        IsAlive = $false
+                        IsAlive      = $false
                         ResponseTime = 0
                     }
                 }
@@ -2572,16 +2439,16 @@ function Start-AdaptiveNetworkScan {
             
             try {
                 $result = @{
-                    IPAddress = $IPAddress
-                    MACAddress = $null
-                    IsAlive = $false
+                    IPAddress    = $IPAddress
+                    MACAddress   = $null
+                    IsAlive      = $false
                     ResponseTime = 0
-                    OpenPorts = @()
-                    Services = @()
-                    Vulnerabilities = @()
-                    ScanTime = 0
-                    Errors = @()
-                    Status = "Unknown"
+                    OpenPorts    = @()
+                    Services     = @()
+                    # ...existing code...
+                    ScanTime     = 0
+                    Errors       = @()
+                    Status       = "Unknown"
                 }
                 
                 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -2615,26 +2482,26 @@ function Start-AdaptiveNetworkScan {
                             }
                         }
                     }
-                } catch { $result.MACAddress = $null }
+                }
+                catch { $result.MACAddress = $null }
                 
                 if ($result.IsAlive) {
                     $result.Status = "Alive"
                     
                     # Perform port scanning only if enabled
                     if ($EnablePortScanning) {
-                        foreach ($port in $PortList) {
+                        foreach ($portObj in $PortList) {
+                            $port = if ($portObj -is [hashtable] -and $portObj.ContainsKey('Port')) { $portObj.Port } else { $portObj }
                             if (Test-PortOpen -IP $IPAddress -Port $port -Timeout $TimeoutMs) {
                                 $result.OpenPorts += $port
-                                
                                 # Perform service detection only if enabled
                                 if ($EnableServiceDetection) {
                                     $serviceInfo = @{
-                                        Port = $port
+                                        Port    = $port
                                         Service = if ($ServicePorts.ContainsKey($port)) { $ServicePorts[$port] } else { "Unknown" }
-                                        IsOpen = $true
-                                        Banner = "N/A"
+                                        IsOpen  = $true
+                                        Banner  = "N/A"
                                     }
-                                    
                                     # Add basic banner grabbing for common services
                                     try {
                                         if ($port -eq 80 -or $port -eq 8080) {
@@ -2653,32 +2520,17 @@ function Start-AdaptiveNetworkScan {
                                     catch {
                                         $serviceInfo.Banner = "Detection Failed"
                                     }
-                                    
                                     $result.Services += $serviceInfo
                                 }
                                 else {
                                     # Just record the open port without service details
                                     $serviceInfo = @{
-                                        Port = $port
+                                        Port    = $port
                                         Service = "Port Open"
-                                        IsOpen = $true
+                                        IsOpen  = $true
                                     }
                                     $result.Services += $serviceInfo
                                 }
-                            }
-                        }
-                        
-                        # Perform vulnerability assessment only if enabled AND ports are open
-                        if ($EnableVulnScan -and $result.OpenPorts.Count -gt 0) {
-                            # Basic vulnerability checks
-                            if (21 -in $result.OpenPorts) {
-                                $result.Vulnerabilities += "FTP service detected - potential security risk"
-                            }
-                            if (23 -in $result.OpenPorts) {
-                                $result.Vulnerabilities += "Telnet service detected - unencrypted protocol"
-                            }
-                            if ($result.OpenPorts.Count -gt 10) {
-                                $result.Vulnerabilities += "Many open ports detected - potential attack surface"
                             }
                         }
                     }
@@ -2694,11 +2546,11 @@ function Start-AdaptiveNetworkScan {
             }
             catch {
                 return @{
-                    IPAddress = $IPAddress
+                    IPAddress  = $IPAddress
                     MACAddress = $null
-                    IsAlive = $false
-                    Error = $_.Exception.Message
-                    Status = "Error"
+                    IsAlive    = $false
+                    Error      = $_.Exception.Message
+                    Status     = "Error"
                 }
             }
         }
@@ -2710,12 +2562,12 @@ function Start-AdaptiveNetworkScan {
         foreach ($hostIP in $HostList) {
             $powerShell = [powershell]::Create()
             $powerShell.RunspacePool = $runspacePool
-            $powerShell.AddScript($scriptBlock).AddParameter("IPAddress", $hostIP).AddParameter("PortList", $PortList).AddParameter("TimeoutMs", $TimeoutMs).AddParameter("DiscoveryMethod", $DiscoveryMethod).AddParameter("ServicePorts", $Global:ServicePorts).AddParameter("EnablePortScanning", $EnablePortScanning).AddParameter("EnableServiceDetection", $EnableServiceDetection).AddParameter("EnableVulnerabilityAssessment", $EnableVulnerabilityAssessment) | Out-Null
+            $powerShell.AddScript($scriptBlock).AddParameter("IPAddress", $hostIP).AddParameter("PortList", $PortList).AddParameter("TimeoutMs", $TimeoutMs).AddParameter("DiscoveryMethod", $DiscoveryMethod).AddParameter("ServicePorts", $Global:ServicePorts).AddParameter("EnablePortScanning", $EnablePortScanning).AddParameter("EnableServiceDetection", $EnableServiceDetection) | Out-Null
             
             $jobs += @{
                 PowerShell = $powerShell
-                Handle = $powerShell.BeginInvoke()
-                HostIP = $hostIP
+                Handle     = $powerShell.BeginInvoke()
+                HostIP     = $hostIP
             }
         }
         
@@ -2742,11 +2594,11 @@ function Start-AdaptiveNetworkScan {
                     catch {
                         Write-Log "Job completion error for $($jobs[$i].HostIP): $($_.Exception.Message)" -Level ([LogLevel]::WARNING)
                         $allResults += @{
-                            IPAddress = $jobs[$i].HostIP
+                            IPAddress  = $jobs[$i].HostIP
                             MACAddress = $null
-                            IsAlive = $false
-                            Error = $_.Exception.Message
-                            Status = "JobError"
+                            IsAlive    = $false
+                            Error      = $_.Exception.Message
+                            Status     = "JobError"
                         }
                     }
                     finally {
@@ -2855,31 +2707,31 @@ function Get-SystemPerformanceTier {
         # Calculate system performance score based on CPU and Memory
         # CPU component (0-50 points) - logarithmic scaling to handle extreme systems
         $cpuScore = if ($LogicalProcessors -le 1) { 5 }
-                   elseif ($LogicalProcessors -le 2) { 10 }
-                   elseif ($LogicalProcessors -le 4) { 20 }
-                   elseif ($LogicalProcessors -le 8) { 30 }
-                   elseif ($LogicalProcessors -le 16) { 40 }
-                   elseif ($LogicalProcessors -le 32) { 45 }
-                   else { 50 }  # 32+ cores = maximum CPU score
+        elseif ($LogicalProcessors -le 2) { 10 }
+        elseif ($LogicalProcessors -le 4) { 20 }
+        elseif ($LogicalProcessors -le 8) { 30 }
+        elseif ($LogicalProcessors -le 16) { 40 }
+        elseif ($LogicalProcessors -le 32) { 45 }
+        else { 50 }  # 32+ cores = maximum CPU score
         
         # Memory component (0-50 points) - progressive scaling
         $memoryScore = if ($FreeMemoryMB -lt 1024) { 5 }        # <1GB free
-                      elseif ($FreeMemoryMB -lt 2048) { 10 }     # 1-2GB free
-                      elseif ($FreeMemoryMB -lt 4096) { 20 }     # 2-4GB free
-                      elseif ($FreeMemoryMB -lt 8192) { 30 }     # 4-8GB free
-                      elseif ($FreeMemoryMB -lt 16384) { 40 }    # 8-16GB free
-                      elseif ($FreeMemoryMB -lt 32768) { 45 }    # 16-32GB free
-                      else { 50 }                                # 32GB+ free = maximum memory score
+        elseif ($FreeMemoryMB -lt 2048) { 10 }     # 1-2GB free
+        elseif ($FreeMemoryMB -lt 4096) { 20 }     # 2-4GB free
+        elseif ($FreeMemoryMB -lt 8192) { 30 }     # 4-8GB free
+        elseif ($FreeMemoryMB -lt 16384) { 40 }    # 8-16GB free
+        elseif ($FreeMemoryMB -lt 32768) { 45 }    # 16-32GB free
+        else { 50 }                                # 32GB+ free = maximum memory score
         
         # Calculate total performance score (0-100)
         $totalScore = $cpuScore + $memoryScore
         
         # Determine tier based on total score
         $tier = if ($totalScore -ge 90) { "Ultra" }        # 90-100: Maximum performance systems
-               elseif ($totalScore -ge 70) { "High" }      # 70-89: High performance systems
-               elseif ($totalScore -ge 50) { "Medium" }    # 50-69: Medium-range systems
-               elseif ($totalScore -ge 30) { "Low" }       # 30-49: Low-end systems
-               else { "Minimal" }                          # 0-29: Minimal/embedded systems
+        elseif ($totalScore -ge 70) { "High" }      # 70-89: High performance systems
+        elseif ($totalScore -ge 50) { "Medium" }    # 50-69: Medium-range systems
+        elseif ($totalScore -ge 30) { "Low" }       # 30-49: Low-end systems
+        else { "Minimal" }                          # 0-29: Minimal/embedded systems
         
         Write-Log "System Performance Analysis:" -Level ([LogLevel]::DEBUG)
         Write-Log "  - CPU Score: $cpuScore/50" -Level ([LogLevel]::DEBUG)
@@ -2929,7 +2781,6 @@ function Export-ScanResults {
         $totalHosts = if ($Global:ScriptConfig.TotalHosts) { $Global:ScriptConfig.TotalHosts } else { $Results.Count }
         $liveHosts = if ($Global:ScriptConfig.LiveHosts) { $Global:ScriptConfig.LiveHosts } else { ($Results | Where-Object { $_.IsAlive }).Count }
         $totalOpenPorts = if ($Global:ScriptConfig.TotalOpenPorts) { $Global:ScriptConfig.TotalOpenPorts } else { ($Results | Where-Object { $_.OpenPorts } | ForEach-Object { $_.OpenPorts.Count } | Measure-Object -Sum).Sum }
-        $vulnerabilitiesFound = if ($Global:ScriptConfig.VulnerabilitiesFound) { $Global:ScriptConfig.VulnerabilitiesFound } else { ($Results | Where-Object { $_.Vulnerabilities } | ForEach-Object { $_.Vulnerabilities.Count } | Measure-Object -Sum).Sum }
         
         # Generate HTML report using proper PowerShell string building techniques
         $scanRange = if ($script:NetworkRange) { $script:NetworkRange } else { "Interactive Scan" }
@@ -3182,10 +3033,6 @@ function Export-ScanResults {
                 <div class="stat-number">$totalOpenPorts</div>
                 <div class="stat-label">Open Ports</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-number">$vulnerabilitiesFound</div>
-                <div class="stat-label">Vulnerabilities</div>
-            </div>
         </div>
         
         <div class="controls">
@@ -3206,7 +3053,6 @@ function Export-ScanResults {
                             <th>Status</th>
                             <th>Open Ports</th>
                             <th>Services</th>
-                            <th>Vulnerabilities</th>
                             <th>Response Time</th>
                         </tr>
                     </thead>
@@ -3232,12 +3078,8 @@ function Export-ScanResults {
                     $serviceArray += "$($service.Port):$($service.Service)"
                 }
                 $serviceArray -join ', '
-            } else {
-                ''
             }
-            $vulnerabilitiesList = if ($result.Vulnerabilities -and $result.Vulnerabilities.Count -gt 0) {
-                ($result.Vulnerabilities -join ', ')
-            } else {
+            else {
                 ''
             }
             $statusClass = switch ($result.Status) {
@@ -3247,12 +3089,13 @@ function Export-ScanResults {
             }
             $latency = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) {
                 "$($result.ResponseTime) ms"
-            } else {
+            }
+            else {
                 ''
             }
             # Only add rows with a valid IP and at least one other non-empty field
             $hasData = $result.IPAddress -and (
-                $openPortsList -or $servicesList -or $vulnerabilitiesList -or $latency -or $result.Status -or $result.MACAddress
+                $openPortsList -or $servicesList -or $latency -or $result.Status -or $result.MACAddress
             )
             if ($hasData) {
                 # Safely encode HTML entities to prevent issues
@@ -3260,7 +3103,6 @@ function Export-ScanResults {
                 $safeMAC = if ($result.MACAddress) { [System.Web.HttpUtility]::HtmlEncode($result.MACAddress) } else { 'N/A' }
                 $safeOpenPorts = if ($openPortsList) { [System.Web.HttpUtility]::HtmlEncode($openPortsList) } else { 'None' }
                 $safeServices = if ($servicesList) { [System.Web.HttpUtility]::HtmlEncode($servicesList) } else { 'None' }
-                $safeVulnerabilities = if ($vulnerabilitiesList -ne '') { [System.Web.HttpUtility]::HtmlEncode($vulnerabilitiesList) } elseif ($result.Vulnerabilities -and $result.Vulnerabilities.Count -eq 0) { 'None' } else { '' }
                 $safeLatency = if ($latency) { [System.Web.HttpUtility]::HtmlEncode($latency) } else { 'N/A' }
                 $safeStatus = if ($result.Status) { [System.Web.HttpUtility]::HtmlEncode($result.Status) } else { 'Unknown' }
                 # Build table row using proper string concatenation
@@ -3271,7 +3113,6 @@ function Export-ScanResults {
                             <td><span class="$statusClass">$safeStatus</span></td>
                             <td>$safeOpenPorts</td>
                             <td>$safeServices</td>
-                            <td>$safeVulnerabilities</td>
                             <td>$safeLatency</td>
                         </tr>
 "@
@@ -3398,19 +3239,18 @@ function Export-ScanResults {
             $openPortsList = if ($result.OpenPorts) { $result.OpenPorts -join ', ' } else { 'None' }
             $servicesList = if ($result.Services) { 
                 ($result.Services | ForEach-Object { "$($_.Port):$($_.Service)" }) -join ', ' 
-            } else { 
+            }
+            else { 
                 'None' 
             }
-            $vulnerabilitiesList = if ($result.Vulnerabilities) { $result.Vulnerabilities -join ', ' } else { 'None' }
             
             $csvData += [PSCustomObject]@{
-                IPAddress       = $result.IPAddress
-                MACAddress      = if ($result.MACAddress) { $result.MACAddress } else { 'N/A' }
-                Status          = $result.Status
-                OpenPorts       = $openPortsList
-                Services        = $servicesList
-                Vulnerabilities = $vulnerabilitiesList
-                Latency         = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) { "$($result.ResponseTime) ms" } else { 'N/A' }
+                IPAddress  = $result.IPAddress
+                MACAddress = if ($result.MACAddress) { $result.MACAddress } else { 'N/A' }
+                Status     = $result.Status
+                OpenPorts  = $openPortsList
+                Services   = $servicesList
+                Latency    = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) { "$($result.ResponseTime) ms" } else { 'N/A' }
             }
         }
         
@@ -3515,12 +3355,10 @@ function Initialize-ScanEnvironment {
         # Log scan parameters
         Write-Log "=== Scan Configuration ===" -Level ([LogLevel]::INFO)
         Write-Log "Network Range: $script:NetworkRange" -Level ([LogLevel]::INFO)
-        Write-Log "Ports to scan: $($Ports -join ', ')" -Level ([LogLevel]::INFO)
         Write-Log "Timeout: $Timeout ms" -Level ([LogLevel]::INFO)
         Write-Log "Output Path: $OutputPath" -Level ([LogLevel]::INFO)
         Write-Log "Port Scanning: $script:EnablePortScanning" -Level ([LogLevel]::INFO)
         Write-Log "Service Detection: $script:EnableServiceDetection" -Level ([LogLevel]::INFO)
-        Write-Log "Vulnerability Scanning: $script:EnableVulnScan" -Level ([LogLevel]::INFO)
         Write-Log "Discovery Method: $Discovery" -Level ([LogLevel]::INFO)
         Write-Log "Email Notifications: $EnableEmail" -Level ([LogLevel]::INFO)
         Write-Log "Memory Limit: $MemoryLimitMB MB" -Level ([LogLevel]::INFO)
@@ -3559,20 +3397,20 @@ function Start-NetworkScan {
             # Dynamic validation based on system performance tier
             $systemTier = Get-SystemPerformanceTier -LogicalProcessors ([int]$env:NUMBER_OF_PROCESSORS) -FreeMemoryMB 0
             $minimumThreads = switch ($systemTier) {
-                "Ultra"   { 500 }
-                "High"    { 300 }
-                "Medium"  { 200 }
-                "Low"     { 100 }
+                "Ultra" { 500 }
+                "High" { 300 }
+                "Medium" { 200 }
+                "Low" { 100 }
                 "Minimal" { 50 }
-                default   { 100 }
+                default { 100 }
             }
             $maximumThreads = switch ($systemTier) {
-                "Ultra"   { 5000 }
-                "High"    { 3000 }
-                "Medium"  { 2000 }
-                "Low"     { 1000 }
+                "Ultra" { 5000 }
+                "High" { 3000 }
+                "Medium" { 2000 }
+                "Low" { 1000 }
                 "Minimal" { 500 }
-                default   { 1000 }
+                default { 1000 }
             }
             
             if ($MaxThreads -lt $minimumThreads) {
@@ -3594,7 +3432,9 @@ function Start-NetworkScan {
         
         # Use adaptive scanning for better performance and resource utilization
         $discoveryMethod = [DiscoveryMethod]::$Discovery
-        $allResults = Start-AdaptiveNetworkScan -HostList $hostList -PortList $Ports -InitialThreadCount $MaxThreads -TimeoutMs $Timeout -DiscoveryMethod $discoveryMethod -EnablePortScanning $script:EnablePortScanning -EnableServiceDetection $script:EnableServiceDetection -EnableVulnerabilityAssessment $script:EnableVulnScan
+        # Always normalize $Ports to a valid array of hashtables for PortList
+        $NormalizedPortList = ConvertTo-PortList -PortList $Ports
+        $allResults = Start-AdaptiveNetworkScan -HostList $hostList -PortList $NormalizedPortList -InitialThreadCount $MaxThreads -TimeoutMs $Timeout -DiscoveryMethod $discoveryMethod -EnablePortScanning $script:EnablePortScanning -EnableServiceDetection $script:EnableServiceDetection
         
         Write-Log "Network scan completed. Processing results..." -Level ([LogLevel]::INFO)
         
@@ -3633,9 +3473,8 @@ function Complete-ScanProcess {
 <p><strong>Total Hosts:</strong> $($Global:ScriptConfig.TotalHosts)</p>
 <p><strong>Live Hosts:</strong> $($Global:ScriptConfig.LiveHosts)</p>
 <p><strong>Open Ports Found:</strong> $($Global:ScriptConfig.TotalOpenPorts)</p>
-<p><strong>Vulnerabilities Found:</strong> $($Global:ScriptConfig.VulnerabilitiesFound)</p>
 <p><strong>Report File:</strong> $($Global:ScriptConfig.ReportFile)</p>
-<p>Please open the attached HTML report for complete scan details including service information, banners, and vulnerability assessments.</p>
+<p>Please open the attached HTML report for complete scan details including service information and banners.</p>
 </body>
 </html>
 "@
@@ -3655,7 +3494,6 @@ function Complete-ScanProcess {
         Write-Host "Hosts Scanned: $($Global:ScriptConfig.ScannedHosts) / $($Global:ScriptConfig.TotalHosts)" -ForegroundColor Yellow
         Write-Host "Live Hosts: $($Global:ScriptConfig.LiveHosts)" -ForegroundColor Yellow
         Write-Host "Open Ports: $($Global:ScriptConfig.TotalOpenPorts)" -ForegroundColor Yellow
-        Write-Host "Vulnerabilities: $($Global:ScriptConfig.VulnerabilitiesFound)" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "Report File:" -ForegroundColor Cyan
         Write-Host "  HTML: $($Global:ScriptConfig.ReportFile)" -ForegroundColor White
@@ -3667,7 +3505,6 @@ function Complete-ScanProcess {
         Write-Log "Hosts Scanned: $($Global:ScriptConfig.ScannedHosts)" -Level ([LogLevel]::INFO)
         Write-Log "Live Hosts: $($Global:ScriptConfig.LiveHosts)" -Level ([LogLevel]::INFO)
         Write-Log "Open Ports: $($Global:ScriptConfig.TotalOpenPorts)" -Level ([LogLevel]::INFO)
-        Write-Log "Vulnerabilities: $($Global:ScriptConfig.VulnerabilitiesFound)" -Level ([LogLevel]::INFO)
         
     }
     catch {
