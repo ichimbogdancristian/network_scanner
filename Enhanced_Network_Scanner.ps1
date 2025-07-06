@@ -155,7 +155,7 @@ param(
     [switch]$VerboseOutput,
     
     [Parameter(HelpMessage = "Enable interactive mode for prompts")]
-    [switch]$Interactive = $true
+    [switch]$Interactive
 )
 
 # Load required assemblies for HTML encoding
@@ -647,13 +647,13 @@ function Get-UserInput {
         if ($IsYesNo) {
             $fullPrompt = "$Prompt [Y/N] (default: $DefaultYesNo): "
             Write-Host $fullPrompt -ForegroundColor Yellow -NoNewline
-            $input = Read-Host
+            $userInput = Read-Host
             
-            if ([string]::IsNullOrWhiteSpace($input)) {
-                $input = $DefaultYesNo
+            if ([string]::IsNullOrWhiteSpace($userInput)) {
+                $userInput = $DefaultYesNo
             }
             
-            return $input.ToUpper().StartsWith("Y")
+            return $userInput.ToUpper().StartsWith("Y")
         }
         else {
             if ($DefaultValue) {
@@ -664,13 +664,13 @@ function Get-UserInput {
             }
             
             Write-Host $fullPrompt -ForegroundColor Yellow -NoNewline
-            $input = Read-Host
+            $userInput = Read-Host
             
-            if ([string]::IsNullOrWhiteSpace($input) -and $DefaultValue) {
+            if ([string]::IsNullOrWhiteSpace($userInput) -and $DefaultValue) {
                 return $DefaultValue
             }
             
-            return $input
+            return $userInput
         }
     }
     catch {
@@ -2264,27 +2264,7 @@ function Start-ResourceMonitor {
     # Initial wait flag
     $script:initialWaitCompleted = $false
     
-    # Create initial wait timer
-    $script:initialWaitTimer = New-Object System.Timers.Timer
-    $script:initialWaitTimer.Interval = $InitialWaitSeconds * 1000
-    $script:initialWaitTimer.AutoReset = $false
-    
-    # Initial wait completion action
-    $initialWaitAction = {
-        Write-Log "Resource monitor: Initial ${InitialWaitSeconds}s wait completed, starting periodic monitoring" -Level ([LogLevel]::INFO)
-        $script:initialWaitCompleted = $true
-        
-        # Start the main monitoring timer
-        $script:resourceTimer = New-Object System.Timers.Timer
-        $script:resourceTimer.Interval = $IntervalSeconds * 1000
-        $script:resourceTimer.AutoReset = $true
-        
-        # Register the main monitoring action
-        Register-ObjectEvent -InputObject $script:resourceTimer -EventName Elapsed -Action $using:monitoringAction | Out-Null
-        $script:resourceTimer.Start()
-    }
-    
-    # Main monitoring action with 10% adjustment logic
+    # Main monitoring action with 10% adjustment logic - DEFINED FIRST
     $monitoringAction = {
         try {
             if (-not $script:resourceMonitoringActive -or -not $script:initialWaitCompleted) { return }
@@ -2319,8 +2299,8 @@ function Start-ResourceMonitor {
             $adjustmentReason = ""
             
             # Check if ANY free resource is less than 30%
-            $needDecrease = ($freeCPU -lt $using:FreeResourceThreshold) -or ($freeMemory -lt $using:FreeResourceThreshold)
-            $canIncrease = ($freeCPU -gt $using:FreeResourceThreshold) -and ($freeMemory -gt $using:FreeResourceThreshold)
+            $needDecrease = ($freeCPU -lt $FreeResourceThreshold) -or ($freeMemory -lt $FreeResourceThreshold)
+            $canIncrease = ($freeCPU -gt $FreeResourceThreshold) -and ($freeMemory -gt $FreeResourceThreshold)
             
             if ($needDecrease) {
                 # Decrease threads by 10%
@@ -2342,12 +2322,13 @@ function Start-ResourceMonitor {
                 $direction = if ($newThreads -gt $oldThreads) { "INCREASED" } else { "DECREASED" }
                 $change = [math]::Abs($newThreads - $oldThreads)
                 
-                Write-Log "Resource monitor: Thread count $direction by $change ($oldThreads -> $newThreads) - $adjustmentReason" -Level ([LogLevel]::INFO)
+                $message = "Resource monitor: Thread count $direction by $change (from $oldThreads -> $newThreads) - $adjustmentReason"
+                Write-Log $message -Level ([LogLevel]::INFO)
                 
                 # Call adjustment callback if provided
-                if ($using:OnThreadAdjustment) {
+                if ($OnThreadAdjustment) {
                     try {
-                        & $using:OnThreadAdjustment $newThreads $oldThreads $adjustmentReason
+                        & $OnThreadAdjustment $newThreads $oldThreads $adjustmentReason
                     }
                     catch {
                         Write-Log "Thread adjustment callback error: $($_.Exception.Message)" -Level ([LogLevel]::WARNING)
@@ -2364,6 +2345,26 @@ function Start-ResourceMonitor {
         catch {
             Write-Log "Resource monitoring error: $($_.Exception.Message)" -Level ([LogLevel]::ERROR)
         }
+    }
+    
+    # Create initial wait timer
+    $script:initialWaitTimer = New-Object System.Timers.Timer
+    $script:initialWaitTimer.Interval = $InitialWaitSeconds * 1000
+    $script:initialWaitTimer.AutoReset = $false
+    
+    # Initial wait completion action
+    $initialWaitAction = {
+        Write-Log "Resource monitor: Initial ${InitialWaitSeconds}s wait completed, starting periodic monitoring" -Level ([LogLevel]::INFO)
+        $script:initialWaitCompleted = $true
+        
+        # Start the main monitoring timer
+        $script:resourceTimer = New-Object System.Timers.Timer
+        $script:resourceTimer.Interval = $IntervalSeconds * 1000
+        $script:resourceTimer.AutoReset = $true
+        
+        # Register the main monitoring action
+        Register-ObjectEvent -InputObject $script:resourceTimer -EventName Elapsed -Action $monitoringAction | Out-Null
+        $script:resourceTimer.Start()
     }
     
     # Register and start the initial wait timer
@@ -2698,7 +2699,8 @@ function Start-AdaptiveNetworkScan {
             $now = Get-Date
             if (($now - $lastProgressReport).TotalSeconds -ge 30) {
                 $percentComplete = [math]::Round(($completedJobs / $HostList.Count) * 100, 1)
-                Write-Log "Progress: $completedJobs/$($HostList.Count) hosts completed ($percentComplete%), using $($script:currentScanThreads) threads" -Level ([LogLevel]::INFO)
+                $message = "Progress: $completedJobs/$($HostList.Count) hosts completed " + $percentComplete + "%, running $($script:currentScanThreads) threads"
+                Write-Log $message -Level ([LogLevel]::INFO)
                 $lastProgressReport = $now
             }
         }
@@ -2818,8 +2820,8 @@ function Get-SystemPerformanceTier {
                else { "Minimal" }                          # 0-29: Minimal/embedded systems
         
         Write-Log "System Performance Analysis:" -Level ([LogLevel]::DEBUG)
-        Write-Log "  - CPU Score: $cpuScore/50 ($LogicalProcessors logical processors)" -Level ([LogLevel]::DEBUG)
-        Write-Log "  - Memory Score: $memoryScore/50 (${FreeMemoryMB}MB free)" -Level ([LogLevel]::DEBUG)
+        Write-Log "  - CPU Score: $cpuScore/50" -Level ([LogLevel]::DEBUG)
+        Write-Log "  - RAM Score: $memoryScore/50" -Level ([LogLevel]::DEBUG)
         Write-Log "  - Total Score: $totalScore/100" -Level ([LogLevel]::DEBUG)
         Write-Log "  - Performance Tier: $tier" -Level ([LogLevel]::DEBUG)
         
@@ -2861,8 +2863,18 @@ function Export-ScanResults {
         
         Write-Log "Generating HTML report: $htmlFile" -Level ([LogLevel]::INFO)
         
-        # Enhanced HTML with filtering and CSV loading capabilities
-        $html = @"
+        # Prepare dynamic values for HTML template
+        $totalHosts = if ($Global:ScriptConfig.TotalHosts) { $Global:ScriptConfig.TotalHosts } else { $Results.Count }
+        $liveHosts = if ($Global:ScriptConfig.LiveHosts) { $Global:ScriptConfig.LiveHosts } else { ($Results | Where-Object { $_.IsAlive }).Count }
+        $totalOpenPorts = if ($Global:ScriptConfig.TotalOpenPorts) { $Global:ScriptConfig.TotalOpenPorts } else { ($Results | Where-Object { $_.OpenPorts } | ForEach-Object { $_.OpenPorts.Count } | Measure-Object -Sum).Sum }
+        $vulnerabilitiesFound = if ($Global:ScriptConfig.VulnerabilitiesFound) { $Global:ScriptConfig.VulnerabilitiesFound } else { ($Results | Where-Object { $_.Vulnerabilities } | ForEach-Object { $_.Vulnerabilities.Count } | Measure-Object -Sum).Sum }
+        
+        # Generate HTML report using proper PowerShell string building techniques
+        $scanRange = if ($script:NetworkRange) { $script:NetworkRange } else { "Interactive Scan" }
+        $currentDate = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        
+        # Build HTML content using proper PowerShell here-string syntax
+        $htmlTemplate = @"
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2870,402 +2882,123 @@ function Export-ScanResults {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Enhanced Network Scan Report</title>
     <style>
-        /* Reset and base styles */
-        * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f5f5f5; 
         }
-        
-        /* Container and layout */
         .container { 
-            max-width: 1600px; 
+            max-width: 1200px; 
             margin: 0 auto; 
-            background: #fff; 
-            border-radius: 12px; 
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15); 
-            overflow: hidden;
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
-        
-        /* Header */
-        .header {
-            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
-            color: white;
-            padding: 30px;
+        .header { 
+            text-align: center; 
+            background: #2c3e50; 
+            color: white; 
+            padding: 20px; 
+            margin: -20px -20px 20px -20px; 
+            border-radius: 8px 8px 0 0;
+        }
+        .stats { 
+            display: flex; 
+            justify-content: space-around; 
+            margin: 20px 0; 
+            flex-wrap: wrap;
+        }
+        .stat-card { 
+            text-align: center; 
+            padding: 15px; 
+            background: #ecf0f1; 
+            border-radius: 5px; 
+            min-width: 120px;
+            margin: 5px;
+        }
+        .stat-number { 
+            font-size: 24px; 
+            font-weight: bold; 
+            color: #2c3e50; 
+        }
+        .stat-label { 
+            color: #666; 
+            margin-top: 5px; 
+            font-size: 12px;
+        }
+        .controls { 
+            margin: 20px 0; 
             text-align: center;
         }
-        .header h1 { font-size: 2.5em; margin-bottom: 10px; text-shadow: 0 2px 4px rgba(0,0,0,0.3); }
-        .header .subtitle { font-size: 1.1em; opacity: 0.9; }
-        
-        /* Stats grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            padding: 30px;
-            background: #f8f9fa;
-        }
-        .stat-card {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            text-align: center;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            transition: transform 0.2s ease;
-        }
-        .stat-card:hover { transform: translateY(-2px); }
-        .stat-number { font-size: 2em; font-weight: bold; color: #2c3e50; }
-        .stat-label { color: #666; margin-top: 5px; }
-        
-        /* Table section */
-        .table-section {
-            background: #fff;
-        }
-        .table-section h2 {
-            border-bottom: 2px solid #e9ecef;
-            padding-bottom: 10px !important;
-            margin-bottom: 0 !important;
-        }
-        
-        /* Unified Controls and Header Section */
-        .controls-header-unified {
-            background: #fff;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            margin: 20px 30px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        
-        /* Controls section */
-        .controls {
-            padding: 20px;
-            background: #f8f9fa;
-            border-bottom: 1px solid #dee2e6;
-        }
-        .controls-grid {
-            display: grid;
-            grid-template-columns: 1fr auto auto auto auto;
-            gap: 15px;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        .csv-controls {
-            display: grid;
-            grid-template-columns: auto 1fr auto;
-            gap: 10px;
-            align-items: center;
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #dee2e6;
-        }
-        
-        /* Results info within unified section */
-        .results-info {
-            padding: 12px 20px;
-            background: #e8f4fd;
-            border-left: 4px solid #3498db;
-            font-weight: 500;
-            color: #2c3e50;
-            margin: 0;
-        }
-        
-        /* Table header within unified section */
-        .table-header {
-            background: linear-gradient(135deg, #34495e 0%, #2c3e50 100%);
-            color: white;
-            margin: 0;
-        }
-        .header-row {
-            display: grid;
-            grid-template-columns: 200px 150px 200px 200px 250px 120px;
-            gap: 0;
-        }
-        .header-cell {
-            padding: 15px 12px;
-            font-weight: 600;
-            cursor: pointer;
-            position: relative;
-            user-select: none;
-            transition: background 0.2s ease;
-            border-right: 1px solid rgba(255,255,255,0.1);
-        }
-        .header-cell:last-child {
-            border-right: none;
-        }
-        .header-cell:hover {
-            background: rgba(255,255,255,0.1);
-        }
-        .header-cell.sortable::after {
-            content: ' ⇅';
-            position: absolute;
-            right: 8px;
-            opacity: 0.5;
-        }
-        .header-cell.sort-asc::after { content: ' ↑'; opacity: 1; color: #3498db; }
-        .header-cell.sort-desc::after { content: ' ↓'; opacity: 1; color: #3498db; }
-        
-        /* Separate Table Container Box */
-        .table-container {
-            background: #fff;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            margin: 0 30px 30px 30px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            overflow: hidden;
-            max-height: 70vh;
-            overflow-y: auto;
-        }
-        
-        /* Search and filter inputs */
-        .search-box, .filter-select, .control-btn, .csv-input, .column-filter {
-            padding: 10px 15px;
-            border: 2px solid #ddd;
-            border-radius: 6px;
-            font-size: 14px;
-            transition: border-color 0.2s ease;
-        }
-        .search-box:focus, .filter-select:focus, .csv-input:focus, .column-filter:focus {
-            outline: none;
-            border-color: #3498db;
-            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
-        }
-        .search-box { width: 100%; }
-        .csv-input { width: 100%; }
-        
-        /* Column Filters */
-        .column-filters {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
-            padding: 15px;
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-        }
-        .filter-group {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-        .filter-group label {
-            font-weight: 600;
-            color: #2c3e50;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .column-filter {
-            padding: 8px 12px;
-            font-size: 13px;
-            width: 100%;
-        }
-        .column-filter:focus {
-            border-color: #3498db;
-            background: #fff;
-        }
-        .column-filter.active {
-            border-color: #27ae60;
-            background: #eafaf1;
-        }
-        
-        /* Active Filters Display */
-        .active-filters {
-            margin-left: 15px;
-            font-size: 12px;
-            color: #666;
-        }
-        .active-filters:not(:empty)::before {
-            content: "• Active filters: ";
-            font-weight: 600;
-            color: #3498db;
-        }
-        .filter-tag {
-            display: inline-block;
-            background: #3498db;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            margin: 0 2px;
-        }
-        
-        /* Buttons */
-        .control-btn {
-            background: #3498db;
-            color: white;
-            border: none;
-            cursor: pointer;
-            font-weight: 500;
-            transition: all 0.2s ease;
-        }
-        .control-btn:hover { background: #2980b9; transform: translateY(-1px); }
-        .control-btn.secondary { background: #95a5a6; }
-        .control-btn.secondary:hover { background: #7f8c8d; }
-        .control-btn.success { background: #27ae60; }
-        .control-btn.success:hover { background: #219a52; }
-        
-        /* Enhanced table within container */
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            margin: 0;
-        }
-        .data-table tbody tr {
-            display: grid;
-            grid-template-columns: 200px 150px 200px 200px 250px 120px;
-            border-bottom: 1px solid #eee;
-        }
-        .data-table tbody tr:hover {
-            background: #f8f9fa;
-            transition: background 0.2s ease;
-        }
-        .data-table tbody tr:nth-child(even) { background: #fafafa; }
-        .data-table tbody tr:nth-child(even):hover { background: #f0f0f0; }
-        
-        .data-table td {
-            padding: 12px;
-            vertical-align: top;
-            border-right: 1px solid #eee;
-        }
-        .data-table td:last-child {
-            border-right: none;
-        }
-        
-        /* Status badges */
-        .status-badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 500;
-            text-transform: uppercase;
-        }
-        .status-alive { background: #d4edda; color: #155724; }
-        .status-notresponding { background: #f8d7da; color: #721c24; }
-        .status-unknown { background: #fff3cd; color: #856404; }
-        
-        /* Port and service lists */
-        .port-list, .service-list, .vuln-list {
-            max-width: 250px;
-            word-wrap: break-word;
-            line-height: 1.4;
-        }
-        .port-item, .service-item {
-            display: inline-block;
-            background: #e9ecef;
-            padding: 2px 6px;
-            margin: 1px;
-            border-radius: 3px;
-            font-size: 11px;
-        }
-        .vuln-item {
-            display: block;
-            background: #ffe6e6;
-            padding: 2px 6px;
-            margin: 1px 0;
-            border-radius: 3px;
-            font-size: 11px;
-            border-left: 3px solid #dc3545;
-        }
-        
-        /* Footer */
-        .footer {
-            background: #2c3e50;
-            color: white;
-            text-align: center;
-            padding: 20px;
+        .control-btn { 
+            background: #3498db; 
+            color: white; 
+            border: none; 
+            padding: 10px 15px; 
+            margin: 5px; 
+            border-radius: 4px; 
+            cursor: pointer; 
             font-size: 14px;
         }
-        
-        /* Responsive design */
-        @media (max-width: 1200px) {
-            .header-row, .data-table tbody tr {
-                grid-template-columns: 150px 120px 180px 180px 200px 100px;
-            }
+        .control-btn:hover { 
+            background: #2980b9; 
         }
-        
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 20px; 
+        }
+        th, td { 
+            padding: 12px; 
+            text-align: left; 
+            border-bottom: 1px solid #ddd; 
+        }
+        th { 
+            background: #34495e; 
+            color: white; 
+            font-weight: bold;
+        }
+        tr:hover { 
+            background: #f5f5f5; 
+        }
+        .status-alive { 
+            background: #d4edda; 
+            color: #155724; 
+            padding: 4px 8px; 
+            border-radius: 4px; 
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-notresponding { 
+            background: #f8d7da; 
+            color: #721c24; 
+            padding: 4px 8px; 
+            border-radius: 4px; 
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-unknown { 
+            background: #fff3cd; 
+            color: #856404; 
+            padding: 4px 8px; 
+            border-radius: 4px; 
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .footer { 
+            text-align: center; 
+            margin-top: 30px; 
+            padding: 20px; 
+            background: #34495e; 
+            color: white; 
+            border-radius: 5px;
+        }
         @media (max-width: 768px) {
-            .container { margin: 10px; }
-            .controls-grid { grid-template-columns: 1fr; }
-            .csv-controls { grid-template-columns: 1fr; }
-            .column-filters { 
-                grid-template-columns: 1fr 1fr; 
-                gap: 10px;
-            }
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .header-row, .data-table tbody tr {
-                grid-template-columns: 1fr;
-                grid-template-rows: repeat(6, auto);
-            }
-            .header-cell, .data-table td {
-                padding: 8px 12px;
-                border-right: none;
-                border-bottom: 1px solid rgba(255,255,255,0.1);
-            }
-            .data-table td {
-                border-bottom: 1px solid #eee;
-            }
-            .header-cell:before, .data-table td:before {
-                content: attr(data-label);
-                font-weight: bold;
-                display: inline-block;
-                width: 100px;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .column-filters { 
-                grid-template-columns: 1fr; 
-                gap: 8px;
-                padding: 10px;
-            }
-            .filter-group label {
-                font-size: 11px;
-            }
-            .column-filter {
-                padding: 6px 10px;
-                font-size: 12px;
-            }
-            .active-filters {
-                font-size: 10px;
-            }
-            .filter-tag {
-                font-size: 10px;
-                padding: 1px 6px;
-            }
-        }
-        
-        /* Utility classes */
-        .hidden { display: none !important; }
-        .text-center { text-align: center; }
-        .text-small { font-size: 12px; color: #666; }
-        
-        /* Loading and empty states */
-        .loading, .no-results {
-            text-align: center;
-            padding: 40px;
-            color: #666;
-            font-style: italic;
-        }
-        .loading::after {
-            content: '';
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #3498db;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-left: 10px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            .stats { flex-direction: column; }
+            .stat-card { margin: 5px 0; }
+            table { font-size: 12px; }
+            th, td { padding: 8px; }
         }
     </style>
 </head>
@@ -3273,125 +3006,73 @@ function Export-ScanResults {
     <div class="container">
         <div class="header">
             <h1>🔍 Enhanced Network Scan Report</h1>
-            <div class="subtitle">Comprehensive network analysis with advanced filtering</div>
+            <p>Comprehensive network analysis and security assessment</p>
         </div>
         
-        <div class="stats-grid">
+        <div class="stats">
             <div class="stat-card">
-                <div class="stat-number" id="scanRange">$script:NetworkRange</div>
+                <div class="stat-number">$scanRange</div>
                 <div class="stat-label">Scan Range</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number" id="totalHosts">$($Global:ScriptConfig.TotalHosts)</div>
+                <div class="stat-number">$totalHosts</div>
                 <div class="stat-label">Total Hosts</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number" id="liveHosts">$($Global:ScriptConfig.LiveHosts)</div>
+                <div class="stat-number">$liveHosts</div>
                 <div class="stat-label">Live Hosts</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number" id="openPorts">$($Global:ScriptConfig.TotalOpenPorts)</div>
+                <div class="stat-number">$totalOpenPorts</div>
                 <div class="stat-label">Open Ports</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number" id="vulnerabilities">$($Global:ScriptConfig.VulnerabilitiesFound)</div>
+                <div class="stat-number">$vulnerabilitiesFound</div>
                 <div class="stat-label">Vulnerabilities</div>
             </div>
         </div>
         
-        <div class="table-section">
-            <h2 style="padding: 20px 30px 10px 30px; color: #2c3e50; font-size: 1.8em; margin: 0;">📊 Discovered Hosts</h2>
-            
-            <!-- Unified Controls and Header Section -->
-            <div class="controls-header-unified">
-                <div class="controls">
-                    <div class="controls-grid">
-                        <input type="text" id="searchInput" class="search-box" placeholder="🔍 Global search across all fields...">
-                        <select id="statusFilter" class="filter-select">
-                            <option value="">All Statuses</option>
-                            <option value="Alive">Live Hosts</option>
-                            <option value="NotResponding">Not Responding</option>
-                            <option value="Unknown">Unknown</option>
-                        </select>
-                        <button id="exportBtn" class="control-btn">📄 Export CSV</button>
-                        <button id="resetBtn" class="control-btn secondary">🔄 Reset Filters</button>
-                        <button id="toggleCsvBtn" class="control-btn secondary">📁 Load CSV</button>
-                    </div>
-                    
-                    <!-- Live Column Filters -->
-                    <div class="column-filters">
-                        <div class="filter-group">
-                            <label>IP Address:</label>
-                            <input type="text" id="ipFilter" class="column-filter" placeholder="e.g., 192.168.1">
-                        </div>
-                        <div class="filter-group">
-                            <label>Ports:</label>
-                            <input type="text" id="portFilter" class="column-filter" placeholder="e.g., 80, 443">
-                        </div>
-                        <div class="filter-group">
-                            <label>Services:</label>
-                            <input type="text" id="serviceFilter" class="column-filter" placeholder="e.g., HTTP, SSH">
-                        </div>
-                        <div class="filter-group">
-                            <label>Vulnerabilities:</label>
-                            <select id="vulnFilter" class="column-filter">
-                                <option value="">All</option>
-                                <option value="has-vulns">Has Vulnerabilities</option>
-                                <option value="no-vulns">No Vulnerabilities</option>
-                            </select>
-                        </div>
-                        <div class="filter-group">
-                            <label>Latency:</label>
-                            <select id="latencyFilter" class="column-filter">
-                                <option value="">All</option>
-                                <option value="fast">Fast (&lt; 50ms)</option>
-                                <option value="medium">Medium (50-200ms)</option>
-                                <option value="slow">Slow (&gt; 200ms)</option>
-                            </select>
-                        </div>
-                    </div>
-                    
-                    <div class="csv-controls hidden" id="csvControls">
-                        <label for="csvFileInput">Load data from CSV:</label>
-                        <input type="file" id="csvFileInput" class="csv-input" accept=".csv" />
-                        <button id="loadCsvBtn" class="control-btn success">Load CSV Data</button>
-                    </div>
-                </div>
-                
-                <div class="results-info" id="resultsInfo">
-                    Showing <span id="visibleRows">0</span> of <span id="totalRows">0</span> hosts
-                    <span id="activeFilters" class="active-filters"></span>
-                </div>
-                
-                <!-- Table Header unified with controls -->
-                <div class="table-header">
-                    <div class="header-row">
-                        <div class="header-cell sortable" data-column="ip">IP Address</div>
-                        <div class="header-cell sortable" data-column="status">Host Status</div>
-                        <div class="header-cell sortable" data-column="ports">Open Ports</div>
-                        <div class="header-cell sortable" data-column="services">Services</div>
-                        <div class="header-cell sortable" data-column="vulnerabilities">Vulnerabilities</div>
-                        <div class="header-cell sortable" data-column="latency">Latency (ms)</div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Separate Table Container Box -->
-            <div class="table-container">
-                <table class="data-table" id="dataTable">
-                <tbody id="tableBody">
+        <div class="controls">
+            <button class="control-btn" onclick="exportToCSV()">📄 Export to CSV</button>
+            <button class="control-btn" onclick="filterLiveHosts()">🔍 Show Live Hosts</button>
+            <button class="control-btn" onclick="showAllHosts()">📋 Show All Hosts</button>
+            <button class="control-btn" onclick="window.print()">🖨️ Print Report</button>
+        </div>
+        
+        <table id="resultsTable">
+            <thead>
+                <tr>
+                    <th>IP Address</th>
+                    <th>Status</th>
+                    <th>Open Ports</th>
+                    <th>Services</th>
+                    <th>Vulnerabilities</th>
+                    <th>Response Time</th>
+                </tr>
+            </thead>
+            <tbody>
 "@
+
+        # Initialize StringBuilder for building the HTML content
+        $html = New-Object System.Text.StringBuilder
+        [void]$html.AppendLine($htmlTemplate)
         
         # Generate table rows from results
         foreach ($result in $sortedResults) {
-            $openPortsList = if ($result.OpenPorts) { ($result.OpenPorts | ForEach-Object { "<span class='port-item'>$_</span>" }) -join ' ' } else { 'None' }
+            $openPortsList = if ($result.OpenPorts) { ($result.OpenPorts -join ', ') } else { 'None' }
+            
             $servicesList = if ($result.Services) { 
-                ($result.Services | ForEach-Object { "<span class='service-item'>$($_.Port):$($_.Service)</span>" }) -join ' '
+                $serviceArray = @()
+                foreach ($service in $result.Services) {
+                    $serviceArray += "$($service.Port):$($service.Service)"
+                }
+                $serviceArray -join ', '
             } else { 
                 'None' 
             }
+            
             $vulnerabilitiesList = if ($result.Vulnerabilities -and $result.Vulnerabilities.Count -gt 0) { 
-                ($result.Vulnerabilities | ForEach-Object { "<span class='vuln-item'>$_</span>" }) -join ''
+                ($result.Vulnerabilities -join ', ')
             } else { 
                 'None' 
             }
@@ -3402,551 +3083,113 @@ function Export-ScanResults {
                 default { 'status-unknown' }
             }
             
-            $latency = if ($result.ResponseTime -ne $null -and $result.ResponseTime -gt 0) { 
+            $latency = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) { 
                 "$($result.ResponseTime) ms" 
             } else { 
                 'N/A' 
             }
-            $latencyValue = if ($result.ResponseTime -ne $null) { $result.ResponseTime } else { 'N/A' }
             
-            # Escape data for HTML attributes
-            $ipEscaped = [System.Web.HttpUtility]::HtmlAttributeEncode($result.IPAddress)
-            $statusEscaped = [System.Web.HttpUtility]::HtmlAttributeEncode($result.Status)
-            $portsEscaped = if ($result.OpenPorts) { [System.Web.HttpUtility]::HtmlAttributeEncode(($result.OpenPorts -join ',')) } else { '' }
-            $servicesEscaped = if ($result.Services) { [System.Web.HttpUtility]::HtmlAttributeEncode((($result.Services | ForEach-Object { "$($_.Port):$($_.Service)" }) -join ',')) } else { '' }
-            $vulnEscaped = if ($result.Vulnerabilities) { [System.Web.HttpUtility]::HtmlAttributeEncode(($result.Vulnerabilities -join ',')) } else { '' }
+            # Safely encode HTML entities to prevent issues
+            $safeIPAddress = [System.Web.HttpUtility]::HtmlEncode($result.IPAddress)
+            $safeOpenPorts = [System.Web.HttpUtility]::HtmlEncode($openPortsList)
+            $safeServices = [System.Web.HttpUtility]::HtmlEncode($servicesList)
+            $safeVulnerabilities = [System.Web.HttpUtility]::HtmlEncode($vulnerabilitiesList)
+            $safeLatency = [System.Web.HttpUtility]::HtmlEncode($latency)
+            $safeStatus = [System.Web.HttpUtility]::HtmlEncode($result.Status)
             
-            $html += @"
-                    <tr data-ip="$ipEscaped" data-status="$statusEscaped" data-ports="$portsEscaped" data-services="$servicesEscaped" data-vulnerabilities="$vulnEscaped" data-latency="$latencyValue">
-                        <td>$($result.IPAddress)</td>
-                        <td><span class="status-badge $statusClass">$($result.Status)</span></td>
-                        <td class="port-list">$openPortsList</td>
-                        <td class="service-list">$servicesList</td>
-                        <td class="vuln-list">$vulnerabilitiesList</td>
-                        <td>$latency</td>
+            # Build table row using proper string concatenation
+            $tableRow = @"
+                    <tr>
+                        <td>$safeIPAddress</td>
+                        <td><span class="$statusClass">$safeStatus</span></td>
+                        <td>$safeOpenPorts</td>
+                        <td>$safeServices</td>
+                        <td>$safeVulnerabilities</td>
+                        <td>$safeLatency</td>
                     </tr>
 "@
+            [void]$html.AppendLine($tableRow)
         }
         
-        # Add JavaScript functionality and close HTML
-        $html += @"
+        # Close HTML structure and add JavaScript functionality
+        $htmlClosing = @"
                 </tbody>
             </table>
-            </div>
         </div>
         
         <div class="footer">
-            <p>Report generated on: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>
-            <p>Powered by Enhanced Network Scanner</p>
+            <p>Report generated on: $currentDate</p>
+            <p>Powered by Enhanced Network Scanner v2.0</p>
         </div>
     </div>
 
     <script>
-        // Global variables
-        let allData = [];
-        let filteredData = [];
-        let currentSort = { column: null, direction: 'asc' };
-        
-        // Initialize the application
-        document.addEventListener('DOMContentLoaded', function() {
-            loadInitialData();
-            bindEventListeners();
-            updateStats();
-        });
-        
-        // Load initial data from the HTML table
-        function loadInitialData() {
-            const rows = document.querySelectorAll('#tableBody tr');
-            allData = Array.from(rows).map(row => ({
-                ip: row.dataset.ip,
-                status: row.dataset.status,
-                ports: row.dataset.ports,
-                services: row.dataset.services,
-                vulnerabilities: row.dataset.vulnerabilities,
-                latency: row.dataset.latency,
-                element: row
-            }));
-            filteredData = [...allData];
-            updateResultsInfo();
-        }
-        
-        // Bind event listeners
-        function bindEventListeners() {
-            // Global search functionality
-            document.getElementById('searchInput').addEventListener('input', applyAllFilters);
-            
-            // Status filter
-            document.getElementById('statusFilter').addEventListener('change', applyAllFilters);
-            
-            // Column filters - live filtering
-            document.getElementById('ipFilter').addEventListener('input', applyAllFilters);
-            document.getElementById('portFilter').addEventListener('input', applyAllFilters);
-            document.getElementById('serviceFilter').addEventListener('input', applyAllFilters);
-            document.getElementById('vulnFilter').addEventListener('change', applyAllFilters);
-            document.getElementById('latencyFilter').addEventListener('change', applyAllFilters);
-            
-            // Control buttons
-            document.getElementById('exportBtn').addEventListener('click', exportToCSV);
-            document.getElementById('resetBtn').addEventListener('click', resetFilters);
-            document.getElementById('toggleCsvBtn').addEventListener('click', toggleCsvControls);
-            document.getElementById('loadCsvBtn').addEventListener('click', loadCsvData);
-            
-            // CSV file input
-            document.getElementById('csvFileInput').addEventListener('change', handleCsvFileSelect);
-            
-            // Table sorting
-            document.querySelectorAll('.sortable').forEach(header => {
-                header.addEventListener('click', () => handleSort(header.dataset.column));
-            });
-        }
-        
-        // Apply all filters - comprehensive live filtering
-        function applyAllFilters() {
-            const globalSearch = document.getElementById('searchInput').value.toLowerCase();
-            const statusFilter = document.getElementById('statusFilter').value;
-            const ipFilter = document.getElementById('ipFilter').value.toLowerCase();
-            const portFilter = document.getElementById('portFilter').value.toLowerCase();
-            const serviceFilter = document.getElementById('serviceFilter').value.toLowerCase();
-            const vulnFilter = document.getElementById('vulnFilter').value;
-            const latencyFilter = document.getElementById('latencyFilter').value;
-            
-            filteredData = allData.filter(item => {
-                // Global search across all fields
-                const matchesGlobalSearch = !globalSearch || 
-                    item.ip.toLowerCase().includes(globalSearch) ||
-                    item.status.toLowerCase().includes(globalSearch) ||
-                    item.ports.toLowerCase().includes(globalSearch) ||
-                    item.services.toLowerCase().includes(globalSearch) ||
-                    item.vulnerabilities.toLowerCase().includes(globalSearch);
-                
-                // Status filter
-                const matchesStatus = !statusFilter || item.status === statusFilter;
-                
-                // IP filter
-                const matchesIP = !ipFilter || item.ip.toLowerCase().includes(ipFilter);
-                
-                // Port filter
-                const matchesPort = !portFilter || item.ports.toLowerCase().includes(portFilter);
-                
-                // Service filter
-                const matchesService = !serviceFilter || item.services.toLowerCase().includes(serviceFilter);
-                
-                // Vulnerability filter
-                let matchesVuln = true;
-                if (vulnFilter === 'has-vulns') {
-                    matchesVuln = item.vulnerabilities && item.vulnerabilities !== 'None' && item.vulnerabilities.trim() !== '';
-                } else if (vulnFilter === 'no-vulns') {
-                    matchesVuln = !item.vulnerabilities || item.vulnerabilities === 'None' || item.vulnerabilities.trim() === '';
-                }
-                
-                // Latency filter
-                let matchesLatency = true;
-                if (latencyFilter && item.latency !== 'N/A') {
-                    const latencyValue = parseInt(item.latency) || 0;
-                    switch (latencyFilter) {
-                        case 'fast':
-                            matchesLatency = latencyValue < 50;
-                            break;
-                        case 'medium':
-                            matchesLatency = latencyValue >= 50 && latencyValue <= 200;
-                            break;
-                        case 'slow':
-                            matchesLatency = latencyValue > 200;
-                            break;
-                    }
-                }
-                
-                return matchesGlobalSearch && matchesStatus && matchesIP && 
-                       matchesPort && matchesService && matchesVuln && matchesLatency;
-            });
-            
-            updateFilterVisuals();
-            applyFilteredResults();
-            updateResultsInfo();
-        }
-        
-        // Update visual indicators for active filters
-        function updateFilterVisuals() {
-            const filterElements = [
-                { id: 'searchInput', label: 'Global' },
-                { id: 'statusFilter', label: 'Status' },
-                { id: 'ipFilter', label: 'IP' },
-                { id: 'portFilter', label: 'Ports' },
-                { id: 'serviceFilter', label: 'Services' },
-                { id: 'vulnFilter', label: 'Vulnerabilities' },
-                { id: 'latencyFilter', label: 'Latency' }
-            ];
-            
-            const activeFilters = [];
-            
-            filterElements.forEach(filter => {
-                const element = document.getElementById(filter.id);
-                const hasValue = element.value.trim() !== '';
-                
-                // Add/remove active class
-                if (hasValue) {
-                    element.classList.add('active');
-                    activeFilters.push(`<span class="filter-tag">${filter.label}: ${element.value}</span>`);
-                } else {
-                    element.classList.remove('active');
-                }
-            });
-            
-            // Update active filters display
-            const activeFiltersContainer = document.getElementById('activeFilters');
-            activeFiltersContainer.innerHTML = activeFilters.join(' ');
-        }
-        
-        // Apply filtered results to the table
-        function applyFilteredResults() {
-            // Hide all rows first
-            allData.forEach(item => {
-                item.element.style.display = 'none';
-            });
-            
-            // Show filtered rows
-            filteredData.forEach(item => {
-                item.element.style.display = '';
-            });
-        }
-        
-        // Legacy function for backward compatibility
-        function handleSearch() {
-            applyAllFilters();
-        }
-        
-        // Legacy function for backward compatibility
-        function handleFilter() {
-            applyAllFilters();
-        }
-                    
-                const matchesStatus = !statusFilter || item.status === statusFilter;
-                
-                return matchesSearch && matchesStatus;
-            });
-            
-            applyFilters();
-        }
-        
-        // Handle status filter
-        function handleFilter() {
-            handleSearch(); // Reuse search logic
-        }
-        
-        // Handle table sorting
-        function handleSort(column) {
-            if (currentSort.column === column) {
-                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
-            } else {
-                currentSort.column = column;
-                currentSort.direction = 'asc';
-            }
-            
-            // Update header classes
-            document.querySelectorAll('.sortable').forEach(header => {
-                header.classList.remove('sort-asc', 'sort-desc');
-                if (header.dataset.column === column) {
-                    header.classList.add('sort-' + currentSort.direction);
-                }
-            });
-            
-            // Sort the data
-            filteredData.sort((a, b) => {
-                let aValue = a[column] || '';
-                let bValue = b[column] || '';
-                
-                // Special handling for IP addresses
-                if (column === 'ip') {
-                    aValue = ipToNumber(aValue);
-                    bValue = ipToNumber(bValue);
-                } else if (column === 'latency') {
-                    aValue = parseInt(aValue) || 0;
-                    bValue = parseInt(bValue) || 0;
-                } else {
-                    aValue = aValue.toLowerCase();
-                    bValue = bValue.toLowerCase();
-                }
-                
-                const comparison = aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
-                return currentSort.direction === 'asc' ? comparison : -comparison;
-            });
-            
-            // Reorder DOM elements
-            const tbody = document.getElementById('tableBody');
-            filteredData.forEach(item => {
-                tbody.appendChild(item.element);
-            });
-        }
-        
-        // Convert IP address to number for sorting
-        function ipToNumber(ip) {
-            if (!ip) return 0;
-            const parts = ip.split('.');
-            return parts.reduce((acc, part, index) => {
-                return acc + (parseInt(part) || 0) * Math.pow(256, 3 - index);
-            }, 0);
-        }
-        
-        // Export filtered data to CSV
         function exportToCSV() {
-            const headers = ['IP Address', 'Status', 'Open Ports', 'Services', 'Vulnerabilities', 'Latency'];
-            const csvContent = [
-                headers.join(','),
-                ...filteredData.map(item => [
-                    item.ip,
-                    item.status,
-                    item.ports.replace(/,/g, '; '),
-                    item.services.replace(/,/g, '; '),
-                    item.vulnerabilities.replace(/,/g, '; '),
-                    item.latency
-                ].map(field => '"' + (field || '').replace(/"/g, '""') + '"').join(','))
-            ].join('\\n');
+            const table = document.getElementById('resultsTable');
+            const rows = table.querySelectorAll('tr');
+            let csvContent = '';
+            
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('th, td');
+                const rowData = Array.from(cells).map(cell => {
+                    let text = cell.textContent || '';
+                    return '"' + text.replace(/"/g, '""') + '"';
+                }).join(',');
+                csvContent += rowData + '\n';
+            });
             
             const blob = new Blob([csvContent], { type: 'text/csv' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'network-scan-filtered-' + new Date().toISOString().split('T')[0] + '.csv';
+            a.download = 'network_scan_' + new Date().toISOString().slice(0, 10) + '.csv';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
         }
-        
-        // Reset all filters
-        function resetFilters() {
-            // Reset all filter inputs
-            document.getElementById('searchInput').value = '';
-            document.getElementById('statusFilter').value = '';
-            document.getElementById('ipFilter').value = '';
-            document.getElementById('portFilter').value = '';
-            document.getElementById('serviceFilter').value = '';
-            document.getElementById('vulnFilter').value = '';
-            document.getElementById('latencyFilter').value = '';
-            
-            // Remove active classes
-            document.querySelectorAll('.column-filter').forEach(filter => {
-                filter.classList.remove('active');
+
+        function filterLiveHosts() {
+            const table = document.getElementById('resultsTable');
+            const rows = table.querySelectorAll('tbody tr');
+            rows.forEach(row => {
+                const statusCell = row.querySelector('td:nth-child(2)');
+                const isAlive = statusCell && statusCell.textContent.includes('Alive');
+                row.style.display = isAlive ? '' : 'none';
             });
-            
-            // Reset data and apply
-            filteredData = [...allData];
-            updateFilterVisuals();
-            applyFilteredResults();
-            updateResultsInfo();
         }
-        
-        // Toggle CSV controls visibility
-        function toggleCsvControls() {
-            const controls = document.getElementById('csvControls');
-            controls.classList.toggle('hidden');
-        }
-        
-        // Handle CSV file selection
-        function handleCsvFileSelect() {
-            const fileInput = document.getElementById('csvFileInput');
-            const loadBtn = document.getElementById('loadCsvBtn');
-            
-            if (fileInput.files.length > 0) {
-                loadBtn.textContent = 'Load: ' + fileInput.files[0].name;
-                loadBtn.disabled = false;
-            } else {
-                loadBtn.textContent = 'Load CSV Data';
-                loadBtn.disabled = true;
-            }
-        }
-        
-        // Load data from CSV file
-        function loadCsvData() {
-            const fileInput = document.getElementById('csvFileInput');
-            const file = fileInput.files[0];
-            
-            if (!file) {
-                alert('Please select a CSV file first.');
-                return;
-            }
-            
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    parseCsvData(e.target.result);
-                } catch (error) {
-                    alert('Error parsing CSV file: ' + error.message);
-                }
-            };
-            reader.readAsText(file);
-        }
-        
-        // Parse CSV data and update table
-        function parseCsvData(csvText) {
-            const lines = csvText.split('\\n').filter(line => line.trim());
-            if (lines.length < 2) {
-                throw new Error('CSV file must contain at least a header and one data row');
-            }
-            
-            const headers = parseCsvLine(lines[0]);
-            const dataLines = lines.slice(1);
-            
-            // Clear existing table data
-            const tbody = document.getElementById('tableBody');
-            tbody.innerHTML = '';
-            allData = [];
-            
-            // Process each data line
-            dataLines.forEach((line, index) => {
-                if (!line.trim()) return;
-                
-                try {
-                    const values = parseCsvLine(line);
-                    const rowData = createRowFromCsv(headers, values, index);
-                    if (rowData) {
-                        allData.push(rowData);
-                        tbody.appendChild(rowData.element);
-                    }
-                } catch (error) {
-                    console.warn('Skipping malformed CSV line ' + (index + 2) + ': ' + error.message);
-                }
+
+        function showAllHosts() {
+            const table = document.getElementById('resultsTable');
+            const rows = table.querySelectorAll('tbody tr');
+            rows.forEach(row => {
+                row.style.display = '';
             });
-            
-            filteredData = [...allData];
-            updateStats();
-            updateResultsInfo();
-            
-            // Show success message
-            alert('Successfully loaded ' + allData.length + ' records from CSV file.');
         }
-        
-        // Parse a single CSV line with proper quote handling
-        function parseCsvLine(line) {
-            const result = [];
-            let current = '';
-            let inQuotes = false;
-            
-            for (let i = 0; i < line.length; i++) {
-                const char = line[i];
-                
-                if (char === '"') {
-                    if (inQuotes && line[i + 1] === '"') {
-                        current += '"';
-                        i++; // Skip next quote
-                    } else {
-                        inQuotes = !inQuotes;
-                    }
-                } else if (char === ',' && !inQuotes) {
-                    result.push(current);
-                    current = '';
-                } else {
-                    current += char;
-                }
-            }
-            
-            result.push(current);
-            return result;
-        }
-        
-        // Create table row from CSV data
-        function createRowFromCsv(headers, values, index) {
-            // Map CSV headers to our data structure
-            const headerMap = {
-                'IPAddress': 'ip',
-                'IP Address': 'ip',
-                'IP': 'ip',
-                'Status': 'status',
-                'Host Status': 'status',
-                'OpenPorts': 'ports',
-                'Open Ports': 'ports',
-                'Ports': 'ports',
-                'Services': 'services',
-                'Vulnerabilities': 'vulnerabilities',
-                'ScanTime': 'latency',
-                'Scan Time': 'latency',
-                'Latency': 'latency',
-                'ResponseTime': 'latency',
-                'Response Time': 'latency',
-                'Time': 'latency'
-            };
-            
-            const rowData = { ip: '', status: 'Unknown', ports: '', services: '', vulnerabilities: '', latency: 'N/A' };
-            
-            // Map CSV values to our structure
-            headers.forEach((header, i) => {
-                const mappedKey = headerMap[header.trim()];
-                if (mappedKey && i < values.length) {
-                    rowData[mappedKey] = values[i].trim();
-                }
+
+        function toggleVulnDetails() {
+            const details = document.querySelectorAll('.vuln-details');
+            details.forEach(detail => {
+                detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
             });
-            
-            // Validate required fields
-            if (!rowData.ip) {
-                throw new Error('IP address is required');
-            }
-            
-            // Create table row element
-            const row = document.createElement('tr');
-            row.dataset.ip = rowData.ip;
-            row.dataset.status = rowData.status;
-            row.dataset.ports = rowData.ports;
-            row.dataset.services = rowData.services;
-            row.dataset.vulnerabilities = rowData.vulnerabilities;
-            row.dataset.latency = rowData.latency;
-            
-            // Determine status class
-            const statusClass = rowData.status === 'Alive' ? 'status-alive' : 
-                               rowData.status === 'NotResponding' ? 'status-notresponding' : 'status-unknown';
-            
-            // Format ports and services for display
-            const portsDisplay = rowData.ports ? 
-                rowData.ports.split(/[;,]/).map(p => '<span class="port-item">' + p.trim() + '</span>').join(' ') : 'None';
-            const servicesDisplay = rowData.services ? 
-                rowData.services.split(/[;,]/).map(s => '<span class="service-item">' + s.trim() + '</span>').join(' ') : 'None';
-            const vulnDisplay = rowData.vulnerabilities ? 
-                rowData.vulnerabilities.split(/[;,]/).map(v => '<span class="vuln-item">' + v.trim() + '</span>').join('') : 'None';
-            
-            row.innerHTML = `
-                <td>` + rowData.ip + `</td>
-                <td><span class="status-badge ` + statusClass + `">` + rowData.status + `</span></td>
-                <td class="port-list">` + portsDisplay + `</td>
-                <td class="service-list">` + servicesDisplay + `</td>
-                <td class="vuln-list">` + vulnDisplay + `</td>
-                <td>` + rowData.latency + `</td>
-            `;
-            
-            rowData.element = row;
-            return rowData;
         }
-        
-        // Update statistics
-        function updateStats() {
-            const totalHosts = allData.length;
-            const liveHosts = allData.filter(item => item.status === 'Alive').length;
-            const totalPorts = allData.reduce((sum, item) => {
-                const portCount = item.ports ? item.ports.split(',').filter(p => p.trim()).length : 0;
-                return sum + portCount;
-            }, 0);
-            const vulnerabilities = allData.reduce((sum, item) => {
-                const vulnCount = item.vulnerabilities && item.vulnerabilities !== 'None' ? 
-                    item.vulnerabilities.split(',').filter(v => v.trim()).length : 0;
-                return sum + vulnCount;
-            }, 0);
-            
-            document.getElementById('totalHosts').textContent = totalHosts;
-            document.getElementById('liveHosts').textContent = liveHosts;
-            document.getElementById('openPorts').textContent = totalPorts;
-            document.getElementById('vulnerabilities').textContent = vulnerabilities;
-        }
-        
-        // Update results info
-        function updateResultsInfo() {
-            document.getElementById('visibleRows').textContent = filteredData.length;
-            document.getElementById('totalRows').textContent = allData.length;
-        }
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Enhanced Network Scanner Report loaded');
+        });
     </script>
 </body>
 </html>
 "@
         
+        [void]$html.AppendLine($htmlClosing)
+        
+        # Get the final HTML string
+        $finalHtml = $html.ToString()
+        
         # Write HTML file
-        Set-Content -Path $htmlFile -Value $html -Encoding UTF8
+        Set-Content -Path $htmlFile -Value $finalHtml -Encoding UTF8
         
         Write-Log "HTML report generated: $htmlFile" -Level ([LogLevel]::INFO)
         
@@ -3969,7 +3212,7 @@ function Export-ScanResults {
                 OpenPorts       = $openPortsList
                 Services        = $servicesList
                 Vulnerabilities = $vulnerabilitiesList
-                Latency         = if ($result.ResponseTime -ne $null -and $result.ResponseTime -gt 0) { 
+                Latency         = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) { 
                     "$($result.ResponseTime) ms" 
                 } else { 
                     'N/A' 
@@ -4249,8 +3492,8 @@ function Complete-ScanProcess {
 
 # Main execution block
 try {
-    # Handle interactive session if network range is not provided or interactive mode is enabled
-    if ([string]::IsNullOrWhiteSpace($NetworkRange) -or $Interactive) {
+    # Handle interactive session if network range is not provided or interactive mode is explicitly enabled
+    if ([string]::IsNullOrWhiteSpace($NetworkRange) -or $Interactive.IsPresent) {
         $hostList = Initialize-InteractiveSession
         # Store the generated host list for later use
         $Global:GeneratedHostList = $hostList
