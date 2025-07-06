@@ -3198,28 +3198,19 @@ function Export-ScanResults {
         <div class="table-container">
             <!-- Table Header Box -->
             <div class="table-header-box">
-            <table class="header-table">
-                <thead>
-                    <tr id="sortRow">
-                        <th data-col="IPAddress">IP Address <span class="sort-btns">▲▼</span></th>
-                        <th data-col="MACAddress">MAC Address <span class="sort-btns">▲▼</span></th>
-                        <th data-col="Status">Status <span class="sort-btns">▲▼</span></th>
-                        <th data-col="OpenPorts">Open Ports <span class="sort-btns">▲▼</span></th>
-                        <th data-col="Services">Services <span class="sort-btns">▲▼</span></th>
-                        <th data-col="Vulnerabilities">Vulnerabilities <span class="sort-btns">▲▼</span></th>
-                        <th data-col="Latency">Latency <span class="sort-btns">▲▼</span></th>
-                    </tr>
-                    <tr id="filterRow">
-                        <th><input type="text" class="filter-input" data-col="IPAddress" placeholder="Filter IP" /></th>
-                        <th><input type="text" class="filter-input" data-col="MACAddress" placeholder="Filter MAC" /></th>
-                        <th><input type="text" class="filter-input" data-col="Status" placeholder="Filter Status" /></th>
-                        <th><input type="text" class="filter-input" data-col="OpenPorts" placeholder="Filter Ports" /></th>
-                        <th><input type="text" class="filter-input" data-col="Services" placeholder="Filter Services" /></th>
-                        <th><input type="text" class="filter-input" data-col="Vulnerabilities" placeholder="Filter Vulns" /></th>
-                        <th><input type="text" class="filter-input" data-col="Latency" placeholder="Filter Latency" /></th>
-                    </tr>
-                </thead>
-            </table>
+                <table class="header-table">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>MAC Address</th>
+                            <th>Status</th>
+                            <th>Open Ports</th>
+                            <th>Services</th>
+                            <th>Vulnerabilities</th>
+                            <th>Response Time</th>
+                        </tr>
+                    </thead>
+                </table>
             </div>
             
             <!-- Table Body Box -->
@@ -3317,93 +3308,6 @@ function Export-ScanResults {
     </style>
 
     <script>
-        // Sorting and Filtering Logic
-        document.addEventListener('DOMContentLoaded', function() {
-            // Sorting
-            const sortRow = document.getElementById('sortRow');
-            const resultsTable = document.getElementById('resultsTable');
-            let sortState = {};
-            if (sortRow) {
-                sortRow.querySelectorAll('th').forEach((th, idx) => {
-                    th.style.cursor = 'pointer';
-                    th.addEventListener('click', function(e) {
-                        if (e.target.classList.contains('filter-input')) return;
-                        const col = th.getAttribute('data-col');
-                        let order = sortState[col] === 'asc' ? 'desc' : 'asc';
-                        sortState = {}; sortState[col] = order;
-                        sortTable(col, order);
-                        updateSortIndicators(col, order);
-                    });
-                });
-            }
-
-            function updateSortIndicators(col, order) {
-                sortRow.querySelectorAll('th').forEach(th => {
-                    const span = th.querySelector('.sort-btns');
-                    if (!span) return;
-                    if (th.getAttribute('data-col') === col) {
-                        span.textContent = order === 'asc' ? '▲' : '▼';
-                    } else {
-                        span.textContent = '▲▼';
-                    }
-                });
-            }
-
-            function getCellValue(row, colIdx) {
-                const cell = row.children[colIdx];
-                return cell ? cell.textContent.trim() : '';
-            }
-
-            function sortTable(col, order) {
-                const colIdx = Array.from(sortRow.children).findIndex(th => th.getAttribute('data-col') === col);
-                const rows = Array.from(resultsTable.querySelectorAll('tbody tr'));
-                rows.sort((a, b) => {
-                    let valA = getCellValue(a, colIdx);
-                    let valB = getCellValue(b, colIdx);
-                    // Numeric sort for Latency and Open Ports
-                    if (col === 'Latency') {
-                        valA = parseFloat(valA) || 0;
-                        valB = parseFloat(valB) || 0;
-                    } else if (col === 'OpenPorts') {
-                        valA = (valA.match(/\d+/g) || []).map(Number).join(',');
-                        valB = (valB.match(/\d+/g) || []).map(Number).join(',');
-                    }
-                    if (valA < valB) return order === 'asc' ? -1 : 1;
-                    if (valA > valB) return order === 'asc' ? 1 : -1;
-                    return 0;
-                });
-                rows.forEach(row => resultsTable.querySelector('tbody').appendChild(row));
-            }
-
-            // Filtering
-            const filterRow = document.getElementById('filterRow');
-            if (filterRow) {
-                filterRow.querySelectorAll('.filter-input').forEach((input, idx) => {
-                    input.addEventListener('input', function() {
-                        filterTable();
-                    });
-                });
-            }
-
-            function filterTable() {
-                const filters = {};
-                filterRow.querySelectorAll('.filter-input').forEach((input, idx) => {
-                    const col = input.getAttribute('data-col');
-                    filters[col] = input.value.trim().toLowerCase();
-                });
-                resultsTable.querySelectorAll('tbody tr').forEach(row => {
-                    let show = true;
-                    row.querySelectorAll('td').forEach((td, idx) => {
-                        const col = sortRow.children[idx].getAttribute('data-col');
-                        if (filters[col] && !td.textContent.toLowerCase().includes(filters[col])) {
-                            show = false;
-                        }
-                    });
-                    row.style.display = show ? '' : 'none';
-                });
-            }
-        });
-
         function exportToCSV() {
             // Get header from header table
             const headerTable = document.querySelector('.header-table');
