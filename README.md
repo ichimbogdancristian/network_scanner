@@ -23,9 +23,14 @@ A comprehensive PowerShell-based network scanning tool with advanced vulnerabili
 - **Risk Assessment**: Categorizes vulnerabilities by severity levels
 
 ### 📊 **Professional Reporting**
-- **HTML Reports**: Beautiful, detailed HTML reports with charts and tables
+- **HTML Reports**: Modern, compact, and fully interactive HTML reports with:
+  - Sortable and filterable columns for all data fields
+  - Print-optimized layout (no clipped tables, minimal blank space)
+  - Responsive, flexible design with minimal margins
+  - Column alignment and widths that match header and data
+  - Visual status indicators and vertical split lines
 - **Real-time Logging**: Comprehensive logging with multiple verbosity levels
-- **Export Options**: Multiple output formats for integration with other tools
+- **Export Options**: HTML, CSV, and optional JSON for integration with other tools
 - **Email Notifications**: Optional email alerts for scan completion and critical findings
 
 ### 🎛️ **User-Friendly Interface**
@@ -165,9 +170,12 @@ flowchart TD
 
 The scanner generates several output files:
 
-- **HTML Report**: `NetworkScan_Report_YYYYMMDD_HHMMSS.html`
+- **HTML Report**: `NetworkScan_Report_YYYYMMDD_HHMMSS.html`  
+  - Fully interactive: sortable/filterable columns, print-optimized, compact layout, and visually clear column alignment.
+- **CSV Report**: `NetworkScan_Report_YYYYMMDD_HHMMSS.csv`  
+  - Matches the HTML table data for easy import into Excel or other tools.
 - **Log File**: `NetworkScan_YYYYMMDD_HHMMSS.log`
-- **Raw Data**: Optional CSV/JSON exports
+- **Raw Data**: Optional JSON exports (future)
 
 ## Performance Optimization
 
@@ -238,12 +246,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Changelog
 
+
 ### Version 2.0 (July 2025)
 - 🎉 **Major Release**: Complete rewrite with enhanced architecture
 - ✨ **New Features**: Interactive mode, auto-detection, multi-method discovery
 - 🚀 **Performance**: Intelligent threading and memory management
 - 🔒 **Security**: Comprehensive vulnerability assessment framework
-- 📊 **Reporting**: Professional HTML reports with visual analytics
+- 📊 **Reporting**: Modern, interactive HTML reports (sortable/filterable, print-optimized, compact, visually aligned columns)
 - 🛠️ **Reliability**: Robust error handling and recovery mechanisms
 
 ### Previous Versions

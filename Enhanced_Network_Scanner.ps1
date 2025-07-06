@@ -2944,40 +2944,42 @@ function Export-ScanResults {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Enhanced Network Scan Report</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            margin: 20px; 
-            background: #f5f5f5; 
+        body {
+            font-family: Arial, sans-serif;
+            margin: 4px;
+            background: #f5f5f5;
         }
-        .container { 
-            max-width: 1200px; 
-            margin: 0 auto; 
-            background: white; 
-            padding: 20px; 
-            border-radius: 8px; 
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        .container {
+            max-width: 100vw;
+            margin: 0;
+            background: white;
+            padding: 6px 6px 12px 6px;
+            border-radius: 6px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.07);
         }
-        .header { 
-            text-align: center; 
-            background: #2c3e50; 
-            color: white; 
-            padding: 20px; 
-            margin: -20px -20px 20px -20px; 
-            border-radius: 8px 8px 0 0;
+        .header {
+            text-align: center;
+            background: #2c3e50;
+            color: white;
+            padding: 12px 4px 12px 4px;
+            margin: -6px -6px 10px -6px;
+            border-radius: 6px 6px 0 0;
         }
-        .stats { 
-            display: flex; 
-            justify-content: space-around; 
-            margin: 20px 0; 
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin: 10px 0 8px 0;
             flex-wrap: wrap;
+            gap: 6px;
         }
-        .stat-card { 
-            text-align: center; 
-            padding: 15px; 
-            background: #ecf0f1; 
-            border-radius: 5px; 
-            min-width: 120px;
-            margin: 5px;
+        .stat-card {
+            text-align: center;
+            padding: 8px 6px;
+            background: #ecf0f1;
+            border-radius: 4px;
+            min-width: 90px;
+            margin: 0;
+            flex: 1 1 90px;
         }
         .stat-number { 
             font-size: 24px; 
@@ -3007,29 +3009,30 @@ function Export-ScanResults {
             background: #2980b9; 
         }
         .table-container {
-            margin-top: 20px;
-            border-radius: 8px;
+            margin-top: 8px;
+            border-radius: 4px;
             overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.07);
         }
         .table-header-box {
             background: #34495e;
-            border-radius: 8px;
+            border-radius: 4px 4px 0 0;
             padding: 0;
-            margin: 0 0 15px 0;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin: 0 0 4px 0;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.07);
         }
         .table-body-box {
             background: white;
             border: 1px solid #ddd;
-            border-radius: 8px;
-            max-height: 600px;
+            border-radius: 0 0 4px 4px;
+            max-height: 60vh;
             overflow-y: auto;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.07);
         }
-        table { 
-            width: 100%; 
-            border-collapse: collapse; 
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
             margin: 0;
         }
         .header-table {
@@ -3039,17 +3042,23 @@ function Export-ScanResults {
         .body-table {
             margin: 0;
         }
-        th, td { 
-            padding: 12px; 
-            text-align: left; 
-            border: none;
+        th, td {
+            padding: 8px 6px;
+            border-right: 1px solid #e0e0e0;
+            border-bottom: 1px solid #eee;
+            text-align: left !important;
         }
+        th:last-child, td:last-child {
+            border-right: none;
+        }
+        /* Column width: match header and body exactly */
         .header-table th:nth-child(1), .body-table td:nth-child(1) { width: 15%; }
         .header-table th:nth-child(2), .body-table td:nth-child(2) { width: 15%; }
         .header-table th:nth-child(3), .body-table td:nth-child(3) { width: 20%; }
         .header-table th:nth-child(4), .body-table td:nth-child(4) { width: 25%; }
         .header-table th:nth-child(5), .body-table td:nth-child(5) { width: 20%; }
         .header-table th:nth-child(6), .body-table td:nth-child(6) { width: 8%; }
+        .header-table th:nth-child(7), .body-table td:nth-child(7) { width: auto; }
         th { 
             background: #34495e; 
             color: white; 
@@ -3092,20 +3101,20 @@ function Export-ScanResults {
             font-size: 12px;
             font-weight: bold;
         }
-        .footer { 
-            text-align: center; 
-            margin-top: 30px; 
-            padding: 20px; 
-            background: #34495e; 
-            color: white; 
-            border-radius: 5px;
+        .footer {
+            text-align: center;
+            margin-top: 12px;
+            padding: 10px 4px;
+            background: #34495e;
+            color: white;
+            border-radius: 4px;
         }
         @media (max-width: 768px) {
             .stats { flex-direction: column; }
-            .stat-card { margin: 5px 0; }
+            .stat-card { margin: 2px 0; }
             .table-container { font-size: 12px; }
-            .table-body-box { max-height: 400px; }
-            th, td { padding: 8px 4px; }
+            .table-body-box { max-height: 40vh; }
+            th, td { padding: 6px 2px; }
             .header-table th:nth-child(1), .body-table td:nth-child(1) { width: 20%; }
             .header-table th:nth-child(2), .body-table td:nth-child(2) { width: 15%; }
             .header-table th:nth-child(3), .body-table td:nth-child(3) { width: 20%; }
@@ -3260,7 +3269,7 @@ function Export-ScanResults {
                 $safeMAC = if ($result.MACAddress) { [System.Web.HttpUtility]::HtmlEncode($result.MACAddress) } else { 'N/A' }
                 $safeOpenPorts = if ($openPortsList) { [System.Web.HttpUtility]::HtmlEncode($openPortsList) } else { 'None' }
                 $safeServices = if ($servicesList) { [System.Web.HttpUtility]::HtmlEncode($servicesList) } else { 'None' }
-                $safeVulnerabilities = if ($vulnerabilitiesList) { [System.Web.HttpUtility]::HtmlEncode($vulnerabilitiesList) } else { 'None' }
+                $safeVulnerabilities = if ($vulnerabilitiesList -ne '') { [System.Web.HttpUtility]::HtmlEncode($vulnerabilitiesList) } elseif ($result.Vulnerabilities -and $result.Vulnerabilities.Count -eq 0) { 'None' } else { '' }
                 $safeLatency = if ($latency) { [System.Web.HttpUtility]::HtmlEncode($latency) } else { 'N/A' }
                 $safeStatus = if ($result.Status) { [System.Web.HttpUtility]::HtmlEncode($result.Status) } else { 'Unknown' }
                 # Build table row using proper string concatenation
