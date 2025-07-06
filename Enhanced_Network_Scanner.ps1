@@ -2100,7 +2100,7 @@ function Get-AdaptiveThreadCount {
             else {
                 # Mildly underutilized - moderate increase
                 $increment = [math]::Max(50, [math]::Round($CurrentThreads * 0.5))  # 50% increase or at least 50 threads
-                $newThreadCount = [math]::Min($CurrentThreads + $increment, $MaxAllowedThreads)
+                $newThreadCount = [math]::Min($CurrentThreads + $increment, $effectiveMaxThreads)
                 Write-Log "System has capacity (CPU: -$([math]::Round($cpuMargin, 1))%, Memory: -$([math]::Round($memoryMargin, 1))%), moderately increasing threads by $increment to $newThreadCount" -Level ([LogLevel]::INFO)
             }
         }
@@ -2214,7 +2214,7 @@ function Get-RealTimeThreadAdjustment {
             else {
                 # Slightly over target - moderate reduction
                 $reduction = [math]::Max(75, [math]::Round($CurrentThreads * 0.25))  # 25% reduction or at least 75
-                $newThreadCount = [math]::Max($CurrentThreads - $reduction, 100)
+                $newThreadCount = [math]::Max($CurrentThreads - $reduction, 100)  # Maintain reasonable minimum threads
                 Write-Log "Over safety margins (CPU: +$([math]::Round($cpuOverage, 1))%, Memory: +$([math]::Round($memoryOverage, 1))%), moderately reducing threads by $reduction to $newThreadCount" -Level ([LogLevel]::INFO)
             }
         }
@@ -2251,7 +2251,7 @@ function Get-RealTimeThreadAdjustment {
         elseif ($cpuMargin -gt 5 -and $memoryMargin -gt 5 -and $currentFreeMemoryMB -gt 2048) {
             # Small increase if we have some headroom
             $increment = [math]::Max(25, [math]::Round($CurrentThreads * 0.25))  # 25% increase or at least 25 threads
-            $newThreadCount = [math]::Min($CurrentThreads + $increment, $effectiveMaxThreads)
+            $newThreadCount = [math]::Min($CurrentThreads + $increment, $MaxAllowedThreads)
             Write-Log "Fine-tuning: Small headroom available (CPU: -$([math]::Round($cpuMargin, 1))%, Memory: -$([math]::Round($memoryMargin, 1))%), small thread increase by $increment to $newThreadCount" -Level ([LogLevel]::DEBUG)
         }
         else {
@@ -2573,6 +2573,7 @@ function Start-AdaptiveNetworkScan {
             try {
                 $result = @{
                     IPAddress = $IPAddress
+                    MACAddress = $null
                     IsAlive = $false
                     ResponseTime = 0
                     OpenPorts = @()
@@ -2589,6 +2590,32 @@ function Start-AdaptiveNetworkScan {
                 $connectivityResult = Test-SimpleConnectivity -IP $IPAddress -Timeout $TimeoutMs
                 $result.IsAlive = $connectivityResult.IsAlive
                 $result.ResponseTime = $connectivityResult.ResponseTime
+                # Retrieve MAC address for this IP
+                try {
+                    $mac = (arp -a | Select-String "\b$IPAddress\b")
+                    if ($mac) {
+                        $macParts = $mac -split '\s+'
+                        foreach ($part in $macParts) {
+                            if ($part -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
+                                $result.MACAddress = $part.ToUpper()
+                                break
+                            }
+                        }
+                    }
+                    if (-not $result.MACAddress) {
+                        Test-Connection -ComputerName $IPAddress -Count 1 -Quiet | Out-Null
+                        $mac = (arp -a | Select-String "\b$IPAddress\b")
+                        if ($mac) {
+                            $macParts = $mac -split '\s+'
+                            foreach ($part in $macParts) {
+                                if ($part -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
+                                    $result.MACAddress = $part.ToUpper()
+                                    break
+                                }
+                            }
+                        }
+                    }
+                } catch { $result.MACAddress = $null }
                 
                 if ($result.IsAlive) {
                     $result.Status = "Alive"
@@ -2641,8 +2668,8 @@ function Start-AdaptiveNetworkScan {
                             }
                         }
                         
-                        # Perform vulnerability assessment only if enabled
-                        if ($EnableVulnerabilityAssessment -and $result.OpenPorts.Count -gt 0) {
+                        # Perform vulnerability assessment only if enabled AND ports are open
+                        if ($EnableVulnScan -and $result.OpenPorts.Count -gt 0) {
                             # Basic vulnerability checks
                             if (21 -in $result.OpenPorts) {
                                 $result.Vulnerabilities += "FTP service detected - potential security risk"
@@ -2668,6 +2695,7 @@ function Start-AdaptiveNetworkScan {
             catch {
                 return @{
                     IPAddress = $IPAddress
+                    MACAddress = $null
                     IsAlive = $false
                     Error = $_.Exception.Message
                     Status = "Error"
@@ -2715,6 +2743,7 @@ function Start-AdaptiveNetworkScan {
                         Write-Log "Job completion error for $($jobs[$i].HostIP): $($_.Exception.Message)" -Level ([LogLevel]::WARNING)
                         $allResults += @{
                             IPAddress = $jobs[$i].HostIP
+                            MACAddress = $null
                             IsAlive = $false
                             Error = $_.Exception.Message
                             Status = "JobError"
@@ -3016,7 +3045,7 @@ function Export-ScanResults {
             border: none;
         }
         .header-table th:nth-child(1), .body-table td:nth-child(1) { width: 15%; }
-        .header-table th:nth-child(2), .body-table td:nth-child(2) { width: 12%; }
+        .header-table th:nth-child(2), .body-table td:nth-child(2) { width: 15%; }
         .header-table th:nth-child(3), .body-table td:nth-child(3) { width: 20%; }
         .header-table th:nth-child(4), .body-table td:nth-child(4) { width: 25%; }
         .header-table th:nth-child(5), .body-table td:nth-child(5) { width: 20%; }
@@ -3084,6 +3113,40 @@ function Export-ScanResults {
             .header-table th:nth-child(5), .body-table td:nth-child(5) { width: 15%; }
             .header-table th:nth-child(6), .body-table td:nth-child(6) { width: 10%; }
         }
+
+        /* Print styles: ensure the entire table is visible and not clipped */
+        @media print {
+            body, .container {
+                background: white !important;
+                box-shadow: none !important;
+            }
+            .table-container, .table-body-box {
+                max-height: none !important;
+                overflow: visible !important;
+                box-shadow: none !important;
+            }
+            .table-header-box {
+                box-shadow: none !important;
+            }
+            .controls, .footer {
+                display: none !important;
+            }
+            .container {
+                margin: 0 !important;
+                padding: 0 !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+            table {
+                page-break-inside: auto;
+            }
+            tr {
+                page-break-inside: avoid;
+                page-break-after: auto;
+            }
+            thead { display: table-header-group; }
+            tfoot { display: table-footer-group; }
+        }
     </style>
 </head>
 <body>
@@ -3130,6 +3193,7 @@ function Export-ScanResults {
                     <thead>
                         <tr>
                             <th>IP Address</th>
+                            <th>MAC Address</th>
                             <th>Status</th>
                             <th>Open Ports</th>
                             <th>Services</th>
@@ -3152,56 +3216,58 @@ function Export-ScanResults {
         
         # Generate table rows from results
         foreach ($result in $sortedResults) {
-            $openPortsList = if ($result.OpenPorts) { ($result.OpenPorts -join ', ') } else { 'None' }
-            
-            $servicesList = if ($result.Services) { 
+            $openPortsList = if ($result.OpenPorts) { ($result.OpenPorts -join ', ') } else { '' }
+            $servicesList = if ($result.Services) {
                 $serviceArray = @()
                 foreach ($service in $result.Services) {
                     $serviceArray += "$($service.Port):$($service.Service)"
                 }
                 $serviceArray -join ', '
-            } else { 
-                'None' 
+            } else {
+                ''
             }
-            
-            $vulnerabilitiesList = if ($result.Vulnerabilities -and $result.Vulnerabilities.Count -gt 0) { 
+            $vulnerabilitiesList = if ($result.Vulnerabilities -and $result.Vulnerabilities.Count -gt 0) {
                 ($result.Vulnerabilities -join ', ')
-            } else { 
-                'None' 
+            } else {
+                ''
             }
-            
             $statusClass = switch ($result.Status) {
                 'Alive' { 'status-alive' }
                 'NotResponding' { 'status-notresponding' }
                 default { 'status-unknown' }
             }
-            
-            $latency = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) { 
-                "$($result.ResponseTime) ms" 
-            } else { 
-                'N/A' 
+            $latency = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) {
+                "$($result.ResponseTime) ms"
+            } else {
+                ''
             }
-            
-            # Safely encode HTML entities to prevent issues
-            $safeIPAddress = [System.Web.HttpUtility]::HtmlEncode($result.IPAddress)
-            $safeOpenPorts = [System.Web.HttpUtility]::HtmlEncode($openPortsList)
-            $safeServices = [System.Web.HttpUtility]::HtmlEncode($servicesList)
-            $safeVulnerabilities = [System.Web.HttpUtility]::HtmlEncode($vulnerabilitiesList)
-            $safeLatency = [System.Web.HttpUtility]::HtmlEncode($latency)
-            $safeStatus = [System.Web.HttpUtility]::HtmlEncode($result.Status)
-            
-            # Build table row using proper string concatenation
-            $tableRow = @"
-                    <tr>
-                        <td>$safeIPAddress</td>
-                        <td><span class="$statusClass">$safeStatus</span></td>
-                        <td>$safeOpenPorts</td>
-                        <td>$safeServices</td>
-                        <td>$safeVulnerabilities</td>
-                        <td>$safeLatency</td>
-                    </tr>
+            # Only add rows with a valid IP and at least one other non-empty field
+            $hasData = $result.IPAddress -and (
+                $openPortsList -or $servicesList -or $vulnerabilitiesList -or $latency -or $result.Status -or $result.MACAddress
+            )
+            if ($hasData) {
+                # Safely encode HTML entities to prevent issues
+                $safeIPAddress = [System.Web.HttpUtility]::HtmlEncode($result.IPAddress)
+                $safeMAC = if ($result.MACAddress) { [System.Web.HttpUtility]::HtmlEncode($result.MACAddress) } else { 'N/A' }
+                $safeOpenPorts = if ($openPortsList) { [System.Web.HttpUtility]::HtmlEncode($openPortsList) } else { 'None' }
+                $safeServices = if ($servicesList) { [System.Web.HttpUtility]::HtmlEncode($servicesList) } else { 'None' }
+                $safeVulnerabilities = if ($vulnerabilitiesList) { [System.Web.HttpUtility]::HtmlEncode($vulnerabilitiesList) } else { 'None' }
+                $safeLatency = if ($latency) { [System.Web.HttpUtility]::HtmlEncode($latency) } else { 'N/A' }
+                $safeStatus = if ($result.Status) { [System.Web.HttpUtility]::HtmlEncode($result.Status) } else { 'Unknown' }
+                # Build table row using proper string concatenation
+                $tableRow = @"
+                        <tr>
+                            <td>$safeIPAddress</td>
+                            <td>$safeMAC</td>
+                            <td><span class="$statusClass">$safeStatus</span></td>
+                            <td>$safeOpenPorts</td>
+                            <td>$safeServices</td>
+                            <td>$safeVulnerabilities</td>
+                            <td>$safeLatency</td>
+                        </tr>
 "@
-            [void]$html.AppendLine($tableRow)
+                [void]$html.AppendLine($tableRow)
+            }
         }
         
         # Close HTML structure and add JavaScript functionality
@@ -3217,6 +3283,20 @@ function Export-ScanResults {
         <p>Powered by Enhanced Network Scanner v2.0</p>
     </div>
 </div>
+    <style>
+        @media print {
+            .table-body-box {
+                max-height: none !important;
+                overflow: visible !important;
+                box-shadow: none !important;
+                border: none !important;
+            }
+            .container {
+                box-shadow: none !important;
+                background: white !important;
+            }
+        }
+    </style>
 
     <script>
         function exportToCSV() {
@@ -3293,11 +3373,9 @@ function Export-ScanResults {
 </html>
 "@
         
+        # Append closing HTML and convert StringBuilder to string
         [void]$html.AppendLine($htmlClosing)
-        
-        # Get the final HTML string
         $finalHtml = $html.ToString()
-        
         # Write HTML file
         Set-Content -Path $htmlFile -Value $finalHtml -Encoding UTF8
         
@@ -3318,15 +3396,12 @@ function Export-ScanResults {
             
             $csvData += [PSCustomObject]@{
                 IPAddress       = $result.IPAddress
+                MACAddress      = if ($result.MACAddress) { $result.MACAddress } else { 'N/A' }
                 Status          = $result.Status
                 OpenPorts       = $openPortsList
                 Services        = $servicesList
                 Vulnerabilities = $vulnerabilitiesList
-                Latency         = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) { 
-                    "$($result.ResponseTime) ms" 
-                } else { 
-                    'N/A' 
-                }
+                Latency         = if ($null -ne $result.ResponseTime -and $result.ResponseTime -gt 0) { "$($result.ResponseTime) ms" } else { 'N/A' }
             }
         }
         
