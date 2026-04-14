@@ -144,6 +144,10 @@ param(
     ,
     [Parameter(HelpMessage = "Enable interactive mode for prompts")]
     [switch]$Interactive
+    ,
+    [Parameter(HelpMessage = "Number of ARP probes per alive host for duplicate-IP detection (1-12)")]
+    [ValidateRange(1, 12)]
+    [int]$MaxProbes = 12
 )
 
 # Unified port list for all scanning and discovery functions (with protocol and service name)
@@ -239,6 +243,8 @@ $Global:ScriptConfig = @{
     ScannedHosts              = 0
     LiveHosts                 = 0
     TotalOpenPorts            = 0
+    IPConflicts               = 0
+    DuplicateIPConflicts      = 0
     ProcessId                 = $PID
     EnablePerformanceCounters = $true
     MemoryMonitor             = $null
@@ -2349,7 +2355,10 @@ function Start-AdaptiveNetworkScan {
         [bool]$EnablePortScanning = $true,
         
         [Parameter()]
-        [bool]$EnableServiceDetection = $true
+        [bool]$EnableServiceDetection = $true,
+
+        [Parameter()]
+        [int]$MaxProbes = 12
         
     )
     
@@ -2388,36 +2397,78 @@ function Start-AdaptiveNetworkScan {
         
         # Define the script block for scanning with self-contained functions
         $scriptBlock = {
-            param($IPAddress, $PortList, $TimeoutMs, $DiscoveryMethod, $ServicePorts, $EnablePortScanning, $EnableServiceDetection)
+            param($IPAddress, $PortList, $TimeoutMs, $DiscoveryMethod, $ServicePorts, $EnablePortScanning, $EnableServiceDetection, $MaxProbes)
             
-            # Simple host connectivity test with response time capture
-            function Test-SimpleConnectivity {
-                param($IP, $Timeout)
+            # Multi-mode host connectivity test - respects $DiscoveryMethod parameter
+            # ICMP: ping only | TCP: port probes only | Both: ICMP first, TCP fallback | Aggressive: ICMP + TCP + ARP
+            function Test-HostDiscovery {
+                param($IP, $Timeout, $Method, $PortList)
                 
-                try {
-                    $ping = New-Object System.Net.NetworkInformation.Ping
-                    $reply = $ping.Send($IP, $Timeout)
-                    $ping.Dispose()
+                $icmpAlive = $false
+                $icmpResponse = 0
+                
+                # --- ICMP probe (skipped in TCP-only mode) ---
+                if ($Method -ne "TCP") {
+                    try {
+                        $ping = New-Object System.Net.NetworkInformation.Ping
+                        $reply = $ping.Send($IP, $Timeout)
+                        $ping.Dispose()
+                        if ($reply.Status -eq "Success") {
+                            $icmpAlive = $true
+                            $icmpResponse = $reply.RoundtripTime
+                        }
+                    }
+                    catch {}
+                }
+                
+                # Return on ICMP success (unless TCP-only mode)
+                if ($icmpAlive) {
+                    return @{ IsAlive = $true; ResponseTime = $icmpResponse; DiscoveryMethod = "ICMP" }
+                }
+                
+                # --- TCP fallback (Both, TCP, Aggressive) ---
+                if ($Method -ne "ICMP") {
+                    $tcpProbePorts = @($PortList | ForEach-Object {
+                            if ($_ -is [hashtable]) {
+                                if ($_.ContainsKey('Protocol') -and $_.Protocol -eq 'TCP') { $_.Port }
+                                elseif (-not $_.ContainsKey('Protocol')) { $_.Port }
+                            }
+                            else { $_ }
+                        } | Where-Object { $_ -ne $null } | Select-Object -First 8)
                     
-                    if ($reply.Status -eq "Success") {
-                        return @{
-                            IsAlive      = $true
-                            ResponseTime = $reply.RoundtripTime
+                    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                    foreach ($port in $tcpProbePorts) {
+                        $client = $null
+                        try {
+                            $client = New-Object System.Net.Sockets.TcpClient
+                            $conn = $client.BeginConnect($IP, $port, $null, $null)
+                            if ($conn.AsyncWaitHandle.WaitOne([int]($Timeout / 2), $false)) {
+                                $client.EndConnect($conn)
+                                $sw.Stop()
+                                return @{ IsAlive = $true; ResponseTime = $sw.ElapsedMilliseconds; DiscoveryMethod = "TCP:$port" }
+                            }
+                        }
+                        catch {}
+                        finally {
+                            if ($client) { $client.Close(); $client.Dispose() }
                         }
                     }
-                    else {
-                        return @{
-                            IsAlive      = $false
-                            ResponseTime = 0
+                    $sw.Stop()
+                }
+                
+                # --- ARP check (Aggressive only) ---
+                if ($Method -eq "Aggressive") {
+                    try {
+                        $esc = [regex]::Escape($IP)
+                        $arpHit = arp -a | Where-Object { $_ -match "\b$esc\b" -and $_ -notmatch "incomplete" }
+                        if ($arpHit) {
+                            return @{ IsAlive = $true; ResponseTime = 0; DiscoveryMethod = "ARP" }
                         }
                     }
+                    catch {}
                 }
-                catch {
-                    return @{
-                        IsAlive      = $false
-                        ResponseTime = 0
-                    }
-                }
+                
+                return @{ IsAlive = $false; ResponseTime = 0; DiscoveryMethod = "None" }
             }
             
             # Simple port scan
@@ -2446,54 +2497,74 @@ function Start-AdaptiveNetworkScan {
                     if ($tcpClient) { $tcpClient.Dispose() }
                 }
             }
+
+            # Multi-probe ARP scan: detects duplicate IPs (same IP answered by different physical devices).
+            # Sends $Probes pings with 250 ms gaps and collects every unique MAC seen in the ARP table.
+            # If more than one MAC is observed, two devices are contending for the same IP address.
+            function Test-DuplicateIPConflict {
+                param($IP, $Timeout, $Probes)
+
+                $observedMACs = @{}
+                $macPattern = '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})'
+                $escapedIP = [regex]::Escape($IP)
+
+                for ($i = 1; $i -le $Probes; $i++) {
+                    # Force ARP cache refresh via ping
+                    $ping = New-Object System.Net.NetworkInformation.Ping
+                    try { $ping.Send($IP, $Timeout) | Out-Null } catch {}
+                    finally { $ping.Dispose() }
+
+                    # Read ARP table immediately after the ping
+                    try {
+                        $arpLines = arp -a | Where-Object { $_ -match "\b$escapedIP\b" }
+                        foreach ($line in @($arpLines)) {
+                            $parts = ($line -split '\s+') | Where-Object { $_ -match $macPattern }
+                            if ($parts) {
+                                $mac = ($parts | Select-Object -First 1).ToString().ToUpper()
+                                $observedMACs[$mac] = $true
+                            }
+                        }
+                    }
+                    catch {}
+
+                    # Pause between probes so a racing device has time to respond
+                    if ($i -lt $Probes) { Start-Sleep -Milliseconds 250 }
+                }
+
+                $uniqueMACs = @($observedMACs.Keys)
+                return @{
+                    IsDuplicate  = ($uniqueMACs.Count -gt 1)
+                    ObservedMACs = $uniqueMACs
+                    PrimaryMAC   = if ($uniqueMACs.Count -gt 0) { $uniqueMACs[0] } else { $null }
+                }
+            }
             
             try {
                 $result = @{
-                    IPAddress    = $IPAddress
-                    MACAddress   = $null
-                    IsAlive      = $false
-                    ResponseTime = 0
-                    OpenPorts    = @()
-                    Services     = @()
-                    # ...existing code...
-                    ScanTime     = 0
-                    Errors       = @()
-                    Status       = "Unknown"
+                    IPAddress           = $IPAddress
+                    MACAddress          = $null
+                    ObservedMACs        = @()
+                    DuplicateIPDetected = $false
+                    IsAlive             = $false
+                    ResponseTime        = 0
+                    OpenPorts           = @()
+                    Services            = @()
+                    ScanTime            = 0
+                    Errors              = @()
+                    Status              = "Unknown"
                 }
                 
                 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                 
-                # Test connectivity first and capture response time
-                $connectivityResult = Test-SimpleConnectivity -IP $IPAddress -Timeout $TimeoutMs
+                # Test connectivity using the configured discovery method
+                $connectivityResult = Test-HostDiscovery -IP $IPAddress -Timeout $TimeoutMs -Method $DiscoveryMethod -PortList $PortList
                 $result.IsAlive = $connectivityResult.IsAlive
                 $result.ResponseTime = $connectivityResult.ResponseTime
-                # Retrieve MAC address for this IP
-                try {
-                    $mac = (arp -a | Select-String "\b$IPAddress\b")
-                    if ($mac) {
-                        $macParts = $mac -split '\s+'
-                        foreach ($part in $macParts) {
-                            if ($part -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
-                                $result.MACAddress = $part.ToUpper()
-                                break
-                            }
-                        }
-                    }
-                    if (-not $result.MACAddress) {
-                        Test-Connection -ComputerName $IPAddress -Count 1 -Quiet | Out-Null
-                        $mac = (arp -a | Select-String "\b$IPAddress\b")
-                        if ($mac) {
-                            $macParts = $mac -split '\s+'
-                            foreach ($part in $macParts) {
-                                if ($part -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
-                                    $result.MACAddress = $part.ToUpper()
-                                    break
-                                }
-                            }
-                        }
-                    }
-                }
-                catch { $result.MACAddress = $null }
+                # Multi-probe MAC collection: runs up to $MaxProbes ARP probes to detect duplicate IPs
+                $dupResult = Test-DuplicateIPConflict -IP $IPAddress -Timeout $TimeoutMs -Probes $MaxProbes
+                $result.MACAddress = $dupResult.PrimaryMAC
+                $result.ObservedMACs = $dupResult.ObservedMACs
+                $result.DuplicateIPDetected = $dupResult.IsDuplicate
                 
                 if ($result.IsAlive) {
                     $result.Status = "Alive"
@@ -2572,7 +2643,7 @@ function Start-AdaptiveNetworkScan {
         foreach ($hostIP in $HostList) {
             $powerShell = [powershell]::Create()
             $powerShell.RunspacePool = $runspacePool
-            $powerShell.AddScript($scriptBlock).AddParameter("IPAddress", $hostIP).AddParameter("PortList", $PortList).AddParameter("TimeoutMs", $TimeoutMs).AddParameter("DiscoveryMethod", $DiscoveryMethod).AddParameter("ServicePorts", $Global:ServicePorts).AddParameter("EnablePortScanning", $EnablePortScanning).AddParameter("EnableServiceDetection", $EnableServiceDetection) | Out-Null
+            $powerShell.AddScript($scriptBlock).AddParameter("IPAddress", $hostIP).AddParameter("PortList", $PortList).AddParameter("TimeoutMs", $TimeoutMs).AddParameter("DiscoveryMethod", $DiscoveryMethod).AddParameter("ServicePorts", $Global:ServicePorts).AddParameter("EnablePortScanning", $EnablePortScanning).AddParameter("EnableServiceDetection", $EnableServiceDetection).AddParameter("MaxProbes", $MaxProbes) | Out-Null
             
             $jobs += @{
                 PowerShell = $powerShell
@@ -2759,6 +2830,76 @@ function Get-SystemPerformanceTier {
 
 #endregion
 
+function Find-IPConflicts {
+    <#
+    .SYNOPSIS
+        Detect two kinds of IP conflicts:
+          Type A (SameMAC_MultipleIPs)      - One MAC appears on multiple IPs
+          Type B (DuplicateIP_MultipleMACs) - One IP is claimed by multiple devices (different MACs seen across probes)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$ScanResults
+    )
+    
+    $conflicts = @()
+    
+    try {
+        Write-Log "Analyzing scan results for IP conflicts (Type-A and Type-B)..." -Level ([LogLevel]::INFO)
+        
+        # --- Type A: Same MAC responding to multiple different IPs ---
+        $macGroups = $ScanResults |
+        Where-Object { $_.IsAlive -and $_.MACAddress -and $_.MACAddress -notin @('N/A', $null, '') } |
+        Group-Object -Property MACAddress
+        
+        foreach ($group in $macGroups) {
+            if ($group.Count -gt 1) {
+                $ips = @($group.Group | ForEach-Object { $_.IPAddress })
+                $conflicts += @{
+                    ConflictType   = 'SameMAC_MultipleIPs'
+                    MACAddress     = $group.Name
+                    ConflictingIPs = $ips
+                    ObservedMACs   = @($group.Name)
+                    IPCount        = $group.Count
+                    Description    = "MAC $($group.Name) is responding to $($group.Count) different IP addresses."
+                }
+                Write-Log "TYPE-A CONFLICT: MAC $($group.Name) found on $($group.Count) IPs: $($ips -join ', ')" -Level ([LogLevel]::WARNING)
+            }
+        }
+        
+        # --- Type B: Same IP answered by different MACs across repeated probes ---
+        foreach ($r in $ScanResults) {
+            if ($r.IsAlive -and $r.DuplicateIPDetected -and $r.ObservedMACs -and $r.ObservedMACs.Count -gt 1) {
+                $conflicts += @{
+                    ConflictType   = 'DuplicateIP_MultipleMACs'
+                    MACAddress     = $r.ObservedMACs -join ', '
+                    ConflictingIPs = @($r.IPAddress)
+                    ObservedMACs   = @($r.ObservedMACs)
+                    IPCount        = 1
+                    Description    = "IP $($r.IPAddress) was answered by $($r.ObservedMACs.Count) different MACs. Two devices are likely assigned the same IP."
+                }
+                Write-Log "TYPE-B CONFLICT (DUPLICATE IP): $($r.IPAddress) answered by MACs: $($r.ObservedMACs -join ', ')" -Level ([LogLevel]::WARNING)
+            }
+        }
+        
+        if ($conflicts.Count -eq 0) {
+            Write-Log "No IP conflicts detected." -Level ([LogLevel]::INFO)
+        }
+        else {
+            $typeA = @($conflicts | Where-Object { $_.ConflictType -eq 'SameMAC_MultipleIPs' }).Count
+            $typeB = @($conflicts | Where-Object { $_.ConflictType -eq 'DuplicateIP_MultipleMACs' }).Count
+            Write-Log "$($conflicts.Count) conflict(s): $typeA Type-A (same MAC / multiple IPs), $typeB Type-B (duplicate IP / multiple MACs)" -Level ([LogLevel]::WARNING)
+        }
+        
+        return $conflicts
+    }
+    catch {
+        Write-Log "Error during IP conflict analysis: $($_.Exception.Message)" -Level ([LogLevel]::ERROR)
+        return @()
+    }
+}
+
 #region 6. REPORTING & OUTPUT
 
 function Export-ScanResults {
@@ -2769,7 +2910,10 @@ function Export-ScanResults {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [array]$Results
+        [array]$Results,
+        
+        [Parameter()]
+        [array]$Conflicts = @()
     )
     
     try {
@@ -2791,6 +2935,7 @@ function Export-ScanResults {
         $totalHosts = if ($Global:ScriptConfig.TotalHosts) { $Global:ScriptConfig.TotalHosts } else { $Results.Count }
         $liveHosts = if ($Global:ScriptConfig.LiveHosts) { $Global:ScriptConfig.LiveHosts } else { ($Results | Where-Object { $_.IsAlive }).Count }
         $totalOpenPorts = if ($Global:ScriptConfig.TotalOpenPorts) { $Global:ScriptConfig.TotalOpenPorts } else { ($Results | Where-Object { $_.OpenPorts } | ForEach-Object { $_.OpenPorts.Count } | Measure-Object -Sum).Sum }
+        $conflictCount = if ($Conflicts) { $Conflicts.Count } else { 0 }
         
         # Generate HTML report using proper PowerShell string building techniques
         $scanRange = if ($script:NetworkRange) { $script:NetworkRange } else { "Interactive Scan" }
@@ -3043,6 +3188,10 @@ function Export-ScanResults {
                 <div class="stat-number">$totalOpenPorts</div>
                 <div class="stat-label">Open Ports</div>
             </div>
+            <div class="stat-card" style="background:$(if ($conflictCount -gt 0) { '#fadbd8' } else { '#d5f5e3' });">
+                <div class="stat-number" style="color:$(if ($conflictCount -gt 0) { '#c0392b' } else { '#1e8449' });">$conflictCount</div>
+                <div class="stat-label">IP Conflicts</div>
+            </div>
         </div>
         
         <div class="controls">
@@ -3130,6 +3279,41 @@ function Export-ScanResults {
             }
         }
         
+        # Build conflicts section HTML - split by Type-A and Type-B
+        $typeAConflicts = @($Conflicts | Where-Object { $_.ConflictType -eq 'SameMAC_MultipleIPs' })
+        $typeBConflicts = @($Conflicts | Where-Object { $_.ConflictType -eq 'DuplicateIP_MultipleMACs' })
+        
+        if ($Conflicts -and $Conflicts.Count -gt 0) {
+            $conflictsSectionHTML = ''
+            
+            # Type A: Same MAC on multiple IPs
+            if ($typeAConflicts.Count -gt 0) {
+                $typeARows = ($typeAConflicts | ForEach-Object {
+                        $mac = [System.Web.HttpUtility]::HtmlEncode($_.MACAddress)
+                        $ips = [System.Web.HttpUtility]::HtmlEncode($_.ConflictingIPs -join ', ')
+                        $cnt = $_.IPCount
+                        "<tr><td style='padding:8px;border:1px solid #e74c3c;font-family:monospace;'>$mac</td><td style='padding:8px;border:1px solid #e74c3c;'>$ips</td><td style='padding:8px;border:1px solid #e74c3c;text-align:center;font-weight:bold;color:#c0392b;'>$cnt</td></tr>"
+                    }) -join "`n"
+                $conflictsSectionHTML += "<div style='margin:8px 0 14px 0;'><h4 style='color:#c0392b;margin:0 0 5px 0;'>&#8680; Type A &mdash; One MAC responding to multiple IPs ($($typeAConflicts.Count))</h4><p style='margin:0 0 6px 0;color:#666;font-size:13px;'>A single physical device is answering more than one IP address. Possible cause: duplicate static IP assignment or misconfigured network device.</p><table style='width:100%;border-collapse:collapse;'><thead><tr style='background:#c0392b;color:white;'><th style='padding:8px;text-align:left;'>MAC Address</th><th style='padding:8px;text-align:left;'>Conflicting IPs</th><th style='padding:8px;text-align:center;width:80px;'>IP Count</th></tr></thead><tbody>$typeARows</tbody></table></div>"
+            }
+            
+            # Type B: Duplicate IP (multiple MACs observed on same IP address)
+            if ($typeBConflicts.Count -gt 0) {
+                $typeBRows = ($typeBConflicts | ForEach-Object {
+                        $ip = [System.Web.HttpUtility]::HtmlEncode($_.ConflictingIPs -join ', ')
+                        $macs = [System.Web.HttpUtility]::HtmlEncode($_.ObservedMACs -join ', ')
+                        $cnt = $_.ObservedMACs.Count
+                        "<tr><td style='padding:8px;border:1px solid #8e44ad;font-family:monospace;font-weight:bold;'>$ip</td><td style='padding:8px;border:1px solid #8e44ad;font-family:monospace;'>$macs</td><td style='padding:8px;border:1px solid #8e44ad;text-align:center;font-weight:bold;color:#8e44ad;'>$cnt</td></tr>"
+                    }) -join "`n"
+                $conflictsSectionHTML += "<div style='margin:8px 0;'><h4 style='color:#8e44ad;margin:0 0 5px 0;'>&#9888; Type B &mdash; Duplicate IP (multiple devices sharing one address) ($($typeBConflicts.Count))</h4><p style='margin:0 0 6px 0;color:#666;font-size:13px;'>One IP address was answered by more than one physical device (different MACs seen across repeated probes). Likely cause: two devices configured with the same static IP.</p><table style='width:100%;border-collapse:collapse;'><thead><tr style='background:#8e44ad;color:white;'><th style='padding:8px;text-align:left;'>IP Address</th><th style='padding:8px;text-align:left;'>Observed MACs (all probes)</th><th style='padding:8px;text-align:center;width:80px;'>MAC Count</th></tr></thead><tbody>$typeBRows</tbody></table></div>"
+            }
+            
+            $conflictsSection = "<div style='margin:16px 6px;padding:14px;background:#fdfefe;border-left:5px solid #c0392b;border-radius:4px;border:1px solid #f5b7b1;'><h3 style='color:#c0392b;margin:0 0 10px 0;'>&#9888; IP Conflicts Detected &mdash; $($Conflicts.Count) total ($($typeAConflicts.Count) Type-A, $($typeBConflicts.Count) Type-B)</h3>$conflictsSectionHTML</div>"
+        }
+        else {
+            $conflictsSection = "<div style='margin:16px 6px;padding:12px;background:#d5f5e3;border-left:5px solid #27ae60;border-radius:4px;'><strong style='color:#1e8449;'>&#10003; No IP Conflicts Detected</strong> &mdash; No duplicate MACs and no duplicate IPs found across $MaxProbes probes per host.</div>"
+        }
+        
         # Close HTML structure and add JavaScript functionality
         $htmlClosing = @"
                     </tbody>
@@ -3137,7 +3321,7 @@ function Export-ScanResults {
             </div>
         </div>
     </div>
-        
+    $conflictsSection
     <div class="footer">
         <p>Report generated on: $currentDate</p>
         <p>Powered by Enhanced Network Scanner v2.0</p>
@@ -3449,7 +3633,7 @@ function Start-NetworkScan {
         $discoveryMethod = [DiscoveryMethod]::$Discovery
         # Always normalize $Ports to a valid array of hashtables for PortList
         $NormalizedPortList = ConvertTo-PortList -PortList $Ports
-        $allResults = Start-AdaptiveNetworkScan -HostList $hostList -PortList $NormalizedPortList -InitialThreadCount $MaxThreads -TimeoutMs $Timeout -DiscoveryMethod $discoveryMethod -EnablePortScanning $script:EnablePortScanning -EnableServiceDetection $script:EnableServiceDetection
+        $allResults = Start-AdaptiveNetworkScan -HostList $hostList -PortList $NormalizedPortList -InitialThreadCount $MaxThreads -TimeoutMs $Timeout -DiscoveryMethod $discoveryMethod -EnablePortScanning $script:EnablePortScanning -EnableServiceDetection $script:EnableServiceDetection -MaxProbes $MaxProbes
         
         Write-Log "Network scan completed. Processing results..." -Level ([LogLevel]::INFO)
         
@@ -3472,8 +3656,13 @@ function Complete-ScanProcess {
     )
     
     try {
+        # Detect IP conflicts before generating the report
+        $ipConflicts = Find-IPConflicts -ScanResults $ScanResults
+        $Global:ScriptConfig.IPConflicts = @($ipConflicts | Where-Object { $_.ConflictType -eq 'SameMAC_MultipleIPs' }).Count
+        $Global:ScriptConfig.DuplicateIPConflicts = @($ipConflicts | Where-Object { $_.ConflictType -eq 'DuplicateIP_MultipleMACs' }).Count
+        
         # Generate and export reports
-        Export-ScanResults -Results $ScanResults
+        Export-ScanResults -Results $ScanResults -Conflicts $ipConflicts
         
         # Send email notification if enabled
         if ($EnableEmail -and $EmailTo -and $SMTPUsername) {
@@ -3509,6 +3698,9 @@ function Complete-ScanProcess {
         Write-Host "Hosts Scanned: $($Global:ScriptConfig.ScannedHosts) / $($Global:ScriptConfig.TotalHosts)" -ForegroundColor Yellow
         Write-Host "Live Hosts: $($Global:ScriptConfig.LiveHosts)" -ForegroundColor Yellow
         Write-Host "Open Ports: $($Global:ScriptConfig.TotalOpenPorts)" -ForegroundColor Yellow
+        $conflictColor = if (($Global:ScriptConfig.IPConflicts + $Global:ScriptConfig.DuplicateIPConflicts) -gt 0) { 'Red' } else { 'Green' }
+        Write-Host "IP Conflicts (Type-A): $($Global:ScriptConfig.IPConflicts)" -ForegroundColor $conflictColor
+        Write-Host "Duplicate IPs (Type-B): $($Global:ScriptConfig.DuplicateIPConflicts)" -ForegroundColor $conflictColor
         Write-Host ""
         Write-Host "Report File:" -ForegroundColor Cyan
         Write-Host "  HTML: $($Global:ScriptConfig.ReportFile)" -ForegroundColor White
@@ -3520,6 +3712,9 @@ function Complete-ScanProcess {
         Write-Log "Hosts Scanned: $($Global:ScriptConfig.ScannedHosts)" -Level ([LogLevel]::INFO)
         Write-Log "Live Hosts: $($Global:ScriptConfig.LiveHosts)" -Level ([LogLevel]::INFO)
         Write-Log "Open Ports: $($Global:ScriptConfig.TotalOpenPorts)" -Level ([LogLevel]::INFO)
+        $conflictLogLevel = if (($Global:ScriptConfig.IPConflicts + $Global:ScriptConfig.DuplicateIPConflicts) -gt 0) { [LogLevel]::WARNING } else { [LogLevel]::INFO }
+        Write-Log "IP Conflicts Type-A (same MAC / multiple IPs): $($Global:ScriptConfig.IPConflicts)" -Level $conflictLogLevel
+        Write-Log "IP Conflicts Type-B (duplicate IP / multiple MACs): $($Global:ScriptConfig.DuplicateIPConflicts)" -Level $conflictLogLevel
         
     }
     catch {
