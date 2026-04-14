@@ -98,9 +98,9 @@
 param(
     [Parameter(Mandatory = $false, HelpMessage = "Network range to scan (e.g., '192.168.1.0/24')")]
     [ValidateScript({
-        if ([string]::IsNullOrEmpty($_)) { return $true }
-        return $_ -match '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
-    })]
+            if ([string]::IsNullOrEmpty($_)) { return $true }
+            return $_ -match '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+        })]
     [string]$NetworkRange
     ,
     [Parameter(HelpMessage = "Array of ports to scan")]
@@ -223,7 +223,7 @@ function ConvertTo-PortList {
 }
 
 # Load required assemblies for HTML encoding
-[System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
+try { Add-Type -AssemblyName System.Web -ErrorAction Stop } catch { }
 
 # Script-level variables for interactive mode
 $script:NetworkRange = if ([string]::IsNullOrWhiteSpace($NetworkRange)) { $null } else { $NetworkRange }
@@ -420,13 +420,16 @@ function Start-PerformanceMonitoring {
         $timer.Interval = 5000  # 5 seconds
         $timer.AutoReset = $true
         
+        # Capture PID and memory limit in MessageData hashtable ($using: is not valid in timer event callbacks)
+        $monitorData = @{ ProcessId = $Global:ScriptConfig.ProcessId; MemoryLimitMB = $MemoryLimitMB }
+
         # Register the event handler
         $Global:ScriptConfig.MemoryMonitor = Register-ObjectEvent -InputObject $timer -EventName Elapsed -Action {
             try {
-                $process = Get-Process -Id $using:Global:ScriptConfig.ProcessId -ErrorAction SilentlyContinue
+                $process = Get-Process -Id $Event.MessageData.ProcessId -ErrorAction SilentlyContinue
                 if ($process) {
                     $memoryUsageMB = [math]::Round($process.WorkingSet64 / 1MB, 2)
-                    $memoryLimit = $Event.MessageData
+                    $memoryLimit = $Event.MessageData.MemoryLimitMB
                     
                     if ($memoryUsageMB -gt $memoryLimit) {
                         Write-Warning "Memory usage (${memoryUsageMB}MB) exceeds limit (${memoryLimit}MB)"
@@ -443,7 +446,7 @@ function Start-PerformanceMonitoring {
             catch {
                 Write-Log "Memory monitoring error: $($_.Exception.Message)" -Level ([LogLevel]::ERROR)
             }
-        } -MessageData $MemoryLimitMB
+        } -MessageData $monitorData
         
         # Store the timer reference
         $Global:ScriptConfig.MemoryTimer = $timer
@@ -839,7 +842,8 @@ function Initialize-InteractiveSession {
         Write-Host "Port Scanning:           $(if ($script:EnablePortScanning) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($script:EnablePortScanning) { 'Green' } else { 'Yellow' })
         Write-Host "Service Detection:       $(if ($script:EnableServiceDetection) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($script:EnableServiceDetection) { 'Green' } else { 'Yellow' })
         # ...existing code...
-        Write-Host "Ports to Scan:           $($Ports -join ', ')" -ForegroundColor White
+        $portsDisplay = ($Ports | ForEach-Object { if ($_ -is [hashtable]) { "$($_.Protocol):$($_.Port)" } else { $_ } }) -join ', '
+        Write-Host "Ports to Scan:           $portsDisplay" -ForegroundColor White
         Write-Host "Discovery Method:        $Discovery" -ForegroundColor White
         Write-Host "Output Directory:        $OutputPath" -ForegroundColor White
         Write-Host "================================================================================================" -ForegroundColor Cyan
@@ -1314,8 +1318,9 @@ function Test-ARPConnectivity {
     }
     
     try {
-        # Check Windows ARP table
-        $arpOutput = arp -a | Where-Object { $_ -match $IPAddress }
+        # Check Windows ARP table - use escaped regex with word boundary to prevent partial IP matches
+        $escapedIP = [regex]::Escape($IPAddress)
+        $arpOutput = arp -a | Where-Object { $_ -match "\b$escapedIP\b" }
         
         if ($arpOutput) {
             $result.IsAlive = $true
@@ -1353,7 +1358,9 @@ function Test-LocalNetwork {
             $target = [System.Net.IPAddress]::Parse($IPAddress).GetAddressBytes()
             $prefixLength = $localIP.PrefixLength
             
-            # Simple subnet check
+            # Reverse bytes to little-endian before ToUInt32 (GetAddressBytes returns big-endian)
+            [Array]::Reverse($network)
+            [Array]::Reverse($target)
             $networkMask = [uint32]((0xFFFFFFFF) -shl (32 - $prefixLength))
             $networkAddr = [System.BitConverter]::ToUInt32($network, 0) -band $networkMask
             $targetAddr = [System.BitConverter]::ToUInt32($target, 0) -band $networkMask
@@ -1528,6 +1535,7 @@ function Invoke-PortScan {
         # UDP scan (basic probe)
         foreach ($portObj in $udpPorts) {
             $port = $portObj.Port
+            $udpClient = $null
             try {
                 $udpClient = New-Object System.Net.Sockets.UdpClient
                 $udpClient.Client.ReceiveTimeout = $TimeoutMs
@@ -1539,10 +1547,12 @@ function Invoke-PortScan {
                     $scanResult.OpenPorts += $port
                     $scanResult.Services += @{ Port = $port; Service = ($Global:ServicePorts[$port] | Out-String).Trim(); Protocol = 'UDP'; IsOpen = $true }
                 }
-                $udpClient.Close()
             }
             catch {
                 $scanResult.Errors += ("UDP scan failed for port ${port}: $($_.Exception.Message)")
+            }
+            finally {
+                if ($udpClient) { $udpClient.Close(); $udpClient.Dispose() }
             }
         }
 
@@ -1977,7 +1987,7 @@ function Get-AdaptiveThreadCount {
         elseif ($cpuMargin -gt 5 -and $memoryMargin -gt 5 -and $currentFreeMemoryMB -gt 2048) {
             # Small increase if we have some headroom
             $increment = [math]::Max(25, [math]::Round($CurrentThreads * 0.25))  # 25% increase or at least 25 threads
-            $newThreadCount = [math]::Min($CurrentThreads + $increment, $MaxAllowedThreads)
+            $newThreadCount = [math]::Min($CurrentThreads + $increment, $effectiveMaxThreads)
             Write-Log "Fine-tuning: Small headroom available (CPU: -$([math]::Round($cpuMargin, 1))%, Memory: -$([math]::Round($memoryMargin, 1))%), small thread increase by $increment to $newThreadCount" -Level ([LogLevel]::DEBUG)
         }
         else {
@@ -2120,7 +2130,7 @@ function Get-RealTimeThreadAdjustment {
         elseif ($cpuMargin -gt 5 -and $memoryMargin -gt 5 -and $currentFreeMemoryMB -gt 2048) {
             # Small increase if we have some headroom
             $increment = [math]::Max(25, [math]::Round($CurrentThreads * 0.25))  # 25% increase or at least 25 threads
-            $newThreadCount = [math]::Min($CurrentThreads + $increment, $MaxAllowedThreads)
+            $newThreadCount = [math]::Min($CurrentThreads + $increment, $effectiveMaxThreads)
             Write-Log "Fine-tuning: Small headroom available (CPU: -$([math]::Round($cpuMargin, 1))%, Memory: -$([math]::Round($memoryMargin, 1))%), small thread increase by $increment to $newThreadCount" -Level ([LogLevel]::DEBUG)
         }
         else {
@@ -3193,7 +3203,7 @@ function Export-ScanResults {
             const bodyTable = document.getElementById('resultsTable');
             const rows = bodyTable.querySelectorAll('tbody tr');
             rows.forEach(row => {
-                const statusCell = row.querySelector('td:nth-child(2)');
+                const statusCell = row.querySelector('td:nth-child(3)');
                 const isAlive = statusCell && statusCell.textContent.includes('Alive');
                 row.style.display = isAlive ? '' : 'none';
             });
@@ -3394,8 +3404,13 @@ function Start-NetworkScan {
             Write-Log "Auto-calculating optimal thread count based on system resources..." -Level ([LogLevel]::INFO)
             $MaxThreads = Get-OptimalThreadCount -DefaultThreads 500 -TotalTargets $hostList.Count
             
-            # Dynamic validation based on system performance tier
-            $systemTier = Get-SystemPerformanceTier -LogicalProcessors ([int]$env:NUMBER_OF_PROCESSORS) -FreeMemoryMB 0
+            # Dynamic validation based on system performance tier - get actual free memory
+            $currentFreeMemoryMBVal = try {
+                $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+                [math]::Round($os.FreePhysicalMemory / 1024)
+            }
+            catch { 0 }
+            $systemTier = Get-SystemPerformanceTier -LogicalProcessors ([int]$env:NUMBER_OF_PROCESSORS) -FreeMemoryMB $currentFreeMemoryMBVal
             $minimumThreads = switch ($systemTier) {
                 "Ultra" { 500 }
                 "High" { 300 }
